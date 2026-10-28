@@ -1,4 +1,5 @@
-
+--- Leaked By KIRA LEAKS
+--- "I look up to provide the finest open sources, against everything that is paid in games"
 
 local chilliGithubFastManualDefaultsRu, obj1, obj7, defaultTab, esp, Misc, Server, obj8, Players, RunService
 local Workspace, Lighting, CoreGui, HttpService, ReplicatedStorage, UserInputService, TeleportService, TextService, Stats, localPlayer
