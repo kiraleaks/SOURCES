@@ -1,0 +1,2952 @@
+-- bro obfuscated this script in Base 64 💀 Chat gpt 100%
+-- DеоЬfuѕсаtеd bу LeаκD | discord.gg/qteAQmfJmP
+
+-- ══════════════════════════════════════════════════════════════════
+--  Keyboard Escape Hub | v6.0
+--  UI : ObsidianUI (Y2k Script Back2Back)
+--  Game : +1 Speed Keyboard Escape | PlaceId 95082159892680
+--  Base: Meister/SARpastes — rewritten & extended
+-- ══════════════════════════════════════════════════════════════════
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  OBSIDIAN UI                                                  │
+-- └──────────────────────────────────────────────────────────────┘
+local Y2k = loadstring(game:HttpGet("https://y2kscript.xyz/lib?f=Core.lua&cb=" .. tostring(math.random(1, 1e7))))()
+local Library, ThemeManager, SaveManager = Y2k.Library, Y2k.ThemeManager, Y2k.SaveManager
+local StatsPanel, Watermark, Keybinds    = Y2k.StatsPanel, Y2k.Watermark, Y2k.Keybinds
+local Toggles, Options = Y2k.Toggles, Y2k.Options
+local repo = Y2k.repo
+local function notify(t,d) pcall(function() Library:Notify({Title=t,Description=d,Time=4}) end) end
+
+if Y2k.claim and not Y2k.claim("Keyboard Escape") then
+    pcall(function() Library:Notify({ Title = "Keyboard Escape", Description = "Already running - press Right Ctrl to toggle the menu.", Time = 5 }) end)
+    return
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  SERVICES                                                     │
+-- └──────────────────────────────────────────────────────────────┘
+local Players              = game:GetService("Players")
+local RunService           = game:GetService("RunService")
+local UserInputService     = game:GetService("UserInputService")
+local ReplicatedStorage    = game:GetService("ReplicatedStorage")
+local TweenService         = game:GetService("TweenService")
+local Lighting             = game:GetService("Lighting")
+local CollectionService    = game:GetService("CollectionService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  REMOTES / MODULES                                            │
+-- └──────────────────────────────────────────────────────────────┘
+local function getRemote(name)
+    local remotes = ReplicatedStorage:WaitForChild("Remotes", 5)
+    return remotes and remotes:WaitForChild(name, 5)
+end
+
+local function fireRemote(name, ...)
+    local r = getRemote(name)
+    if r then
+        pcall(function(...) r:FireServer(...) end, ...)
+    end
+end
+
+local ClientState
+pcall(function()
+    ClientState = require(ReplicatedStorage:WaitForChild("ClientState", 8))
+end)
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  HELPERS                                                      │
+-- └──────────────────────────────────────────────────────────────┘
+local function getChar()  return LocalPlayer.Character end
+local function getRoot()  local c=getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHum()   local c=getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function getState()
+    if not ClientState then return {} end
+    -- In this game, ClientState is a ModuleScript; its .Data table holds the live state directly
+    if ClientState.Data and type(ClientState.Data) == "table" then
+        return ClientState.Data
+    end
+    -- Fallback to Get() if Data is unavailable
+    local ok,v = pcall(function() return ClientState:Get() end)
+    return (ok and type(v)=="table") and v or {}
+end
+
+-- Helper: convert string booleans ("true"/"false") and numbers to proper types
+local function toBool(v)
+    if type(v) == "boolean" then return v end
+    if type(v) == "string" then return v:lower() == "true" end
+    if type(v) == "number" then return v ~= 0 end
+    return v and true or false
+end
+
+local function fmt(n)
+    n = tonumber(n) or 0
+    if     n>=1e12 then return string.format("%.1fT",n/1e12)
+    elseif n>=1e9  then return string.format("%.1fB",n/1e9)
+    elseif n>=1e6  then return string.format("%.1fM",n/1e6)
+    elseif n>=1e3  then return string.format("%.1fK",n/1e3)
+    else                return tostring(math.floor(n)) end
+end
+
+-- ── Inventory / Shop helpers (REAL GAME DATA) ──────────────────────
+-- In this game, currency = Wins (not separate Trophies)
+local function getTrophies()
+    local s = getState()
+    return tonumber(s.Wins or s.Trophies or s.Trophy or s.Currency or 0) or 0
+end
+
+-- Direct remote fire with exact names
+local function fireAuraRemote(name, ...)
+    local rem = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild(name)
+    if rem then
+        if rem:IsA("RemoteFunction") then
+            local ok, res1, res2 = pcall(function(args) return rem:InvokeServer(unpack(args)) end, {...})
+            return ok
+        else
+            pcall(function(...) rem:FireServer(...) end, ...)
+            return true
+        end
+    end
+    return false
+end
+
+local function buyAura(name)
+    return fireAuraRemote("BuyAura", name, "Wins")
+end
+local function equipAura(name)
+    return fireAuraRemote("EquipAura", name)
+end
+local function buyTrail(name)
+    return fireAuraRemote("BuyTrail", name, "Wins")
+end
+local function equipTrail(name)
+    return fireAuraRemote("EquipTrail", name)
+end
+
+local function buyItem(name, itemType)
+    local t = (itemType or ""):lower()
+    if t:find("aura") then buyAura(name)
+    elseif t:find("trail") then buyTrail(name)
+    else
+        buyAura(name)
+        buyTrail(name)
+    end
+end
+
+local function equipItem(name, itemType)
+    local t = (itemType or ""):lower()
+    if t:find("aura") then equipAura(name)
+    elseif t:find("trail") then equipTrail(name)
+    else
+        equipAura(name)
+        equipTrail(name)
+    end
+end
+
+local function unequipAll()
+    fireAuraRemote("EquipAura", "None")
+    fireAuraRemote("EquipTrail", "None")
+end
+
+-- Get all auras from the real Auras module
+local function getAllAuras()
+    local auraMod = nil
+    pcall(function()
+        for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+            if obj:IsA("ModuleScript") and obj.Name == "Auras" then
+                auraMod = require(obj)
+                break
+            end
+        end
+    end)
+    local result = {}
+    if auraMod and auraMod.AURAS then
+        for k, v in pairs(auraMod.AURAS) do
+            if type(v) == "table" then
+                table.insert(result, {name=k, price=tonumber(v.price or v.Price or 0), type="Aura", rarity=tonumber(v.multiplier or 1)})
+            end
+        end
+    end
+    return result
+end
+
+-- Get all trails (exact names from game UI; all cost 0 Wins / gamepass only)
+local function getAllTrails()
+    return {
+        {name="BlueTrail",       price=0, type="Trail", rarity=1},
+        {name="RedTrail",        price=0, type="Trail", rarity=2},
+        {name="GreenTrail",      price=0, type="Trail", rarity=3},
+        {name="PurpleTrail",     price=0, type="Trail", rarity=4},
+        {name="EasterGoldenTrail",price=0, type="Trail", rarity=5},
+        {name="EasterTrail",     price=0, type="Trail", rarity=6},
+        {name="CosmicTrail",     price=0, type="Trail", rarity=7},
+        {name="GalaxyTrail",     price=0, type="Trail", rarity=8},
+        {name="SupernovaTrail",  price=0, type="Trail", rarity=9},
+        {name="GodlikeTrail",    price=0, type="Trail", rarity=10},
+        {name="VoidTrail",       price=0, type="Trail", rarity=11},
+        {name="RainbowTrail",    price=0, type="Trail", rarity=12},
+        {name="InfinityTrail",   price=0, type="Trail", rarity=13},
+    }
+end
+
+local function getShopAurasTrails()
+    return getAllAuras(), getAllTrails()
+end
+
+-- Get owned auras/trails from player data (arrays)
+local function getInventoryAuras()
+    local s = getState()
+    local result = {}
+    if type(s.OwnedAuras) == "table" then
+        for _, name in pairs(s.OwnedAuras) do
+            table.insert(result, {name=name, type="Aura", rarity=0})
+        end
+    end
+    if type(s.OwnedTrails) == "table" then
+        for _, name in pairs(s.OwnedTrails) do
+            table.insert(result, {name=name, type="Trail", rarity=0})
+        end
+    end
+    return result
+end
+
+-- Get shop items (hardcoded from game data + dynamic scan)
+local function getShopItems()
+    local items = {}
+    -- Hardcoded items discovered from MCP scans
+    local knownItems = {
+        {name="CaramelBow",        price=1000,  type="Item"},
+        {name="PinkGummyBear",      price=5000,  type="Item"},
+        {name="CookieBag",          price=5000,  type="Item"},
+        {name="PinkHeartLollipop", price=2500,  type="Item"},
+        {name="CupcakeMic",         price=2500,  type="Item"},
+    }
+    for _, item in ipairs(knownItems) do
+        table.insert(items, item)
+    end
+    -- Also try to read from ItemsShopConfig if it exists
+    local shopCfg = nil
+    pcall(function()
+        local mod = ReplicatedStorage:FindFirstChild("ItemsShopConfig")
+        if mod then shopCfg = require(mod) end
+    end)
+    if shopCfg and type(shopCfg) == "table" then
+        for k, v in pairs(shopCfg) do
+            if type(v) == "table" then
+                table.insert(items, {name=k, price=tonumber(v.Price or v.price or 0), type=v.Type or v.type or "Item"})
+            end
+        end
+    end
+    -- Remove duplicates by name
+    local seen = {}
+    local result = {}
+    for _, item in ipairs(items) do
+        if not seen[item.name] then
+            seen[item.name] = true
+            table.insert(result, item)
+        end
+    end
+    return result
+end
+
+local function isPlayerChar(model)
+    for _,p in ipairs(Players:GetPlayers()) do
+        if p.Character == model then return true end
+    end
+    return false
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  STAGE DATA                                                   │
+-- │  startPos = stage entrance  |  winPos = WinBlock (end)       │
+-- └──────────────────────────────────────────────────────────────┘
+local STAGES = {
+    -- Used for Teleport tab + checkpoint index
+    {n=2,  req=0,     idx=1,  startPos=Vector3.new(2.48,      8.86,   288.55)},
+    {n=3,  req=2,     idx=2,  startPos=Vector3.new(3.39,      8.86,   513.56)},
+    {n=4,  req=6,     idx=3,  startPos=Vector3.new(1.08,      77.15,  777.55)},
+    {n=5,  req=20,    idx=4,  startPos=Vector3.new(0.34,      77.15,  1106.82)},
+    {n=6,  req=40,    idx=5,  startPos=Vector3.new(0.99,      77.15,  1413.22)},
+    {n=7,  req=100,   idx=6,  startPos=Vector3.new(-545.54,   54.50,  1465.26)},
+    {n=8,  req=200,   idx=7,  startPos=Vector3.new(-1006.80,  54.50,  1464.48)},
+    {n=9,  req=300,   idx=8,  startPos=Vector3.new(-1119.23,  296.50, 1465.31)},
+    {n=10, req=600,   idx=9,  startPos=Vector3.new(-2963.18,  294.73,  1466.41)},
+    {n=11, req=1000,  idx=10, startPos=Vector3.new(-3941.47,  294.77,  1467.58)},
+    {n=12, req=2000,  idx=11, startPos=Vector3.new(-4360.53,  469.30,  1528.82)},
+    {n=13, req=5000,  idx=12, startPos=Vector3.new(-5334.84,  471.45,  1480.10)},
+    {n=14, req=20000, idx=13, startPos=Vector3.new(-6808.15,  521.06,  1486.43)},
+    {n=15, req=50000, idx=14, startPos=Vector3.new(-8351.15,  482.61,  1488.75)},
+    {n=16, req=100000, idx=15, startPos=Vector3.new(-14002.25, 748.74,  3060.79)},
+}
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  117 NAVIGATION WAYPOINTS (WORLD 1)                           │
+-- └──────────────────────────────────────────────────────────────┘
+local NAV_POINTS_W1 = {
+    [1]   = Vector3.new(2.48,      8.86,   288.55),
+    [2]   = Vector3.new(56.97,     8.85,   384.84),
+    [3]   = Vector3.new(3.39,      8.86,   513.56),
+    [4]   = Vector3.new(20.44,     8.84,   558.21),
+    [5]   = Vector3.new(19.19,     76.35,  748.01),
+    [6]   = Vector3.new(1.08,      77.15,  777.55),
+    [7]   = Vector3.new(0.62,      77.15,  896.60),
+    [8]   = Vector3.new(18.60,     77.15,  933.97),
+    [9]   = Vector3.new(66.34,     77.15,  937.60),
+    [10]  = Vector3.new(101.36,    77.15,  942.52),
+    [11]  = Vector3.new(101.27,    77.15,  1006.56),
+    [12]  = Vector3.new(45.93,     77.15,  1004.26),
+    [13]  = Vector3.new(9.99,      77.15,  1011.31),
+    [14]  = Vector3.new(0.34,      77.15,  1106.82),
+    [15]  = Vector3.new(1.23,      77.15,  1150.55),
+    [16]  = Vector3.new(0.99,      77.15,  1413.22),
+    [17]  = Vector3.new(-6.49,     54.50,  1466.32),
+    [18]  = Vector3.new(-545.54,   54.50,  1465.26),
+    [19]  = Vector3.new(-1006.80,  54.50,  1464.48),
+    [20]  = Vector3.new(-1088.03,  54.40,  1467.89),
+    [21]  = Vector3.new(-1090.88,  296.50,  1467.12),
+    [22]  = Vector3.new(-1119.23,  296.50,  1465.31),
+    [23]  = Vector3.new(-1242.30,  303.22,  1469.69),
+    [24]  = Vector3.new(-1342.73,  285.09,  1468.27),
+    [25]  = Vector3.new(-1508.42,  336.25,  1465.79),
+    [26]  = Vector3.new(-1562.87,  322.08,  1463.60),
+    [27]  = Vector3.new(-1618.95,  319.38,  1467.83),
+    [28]  = Vector3.new(-1748.70,  289.47,  1462.61),
+    [29]  = Vector3.new(-1863.31,  316.66,  1460.05),
+    [30]  = Vector3.new(-1935.88,  305.78,  1466.73),
+    [31]  = Vector3.new(-2041.07,  305.56,  1469.49),
+    [32]  = Vector3.new(-2125.82,  305.68,  1463.47),
+    [33]  = Vector3.new(-2172.93,  321.94,  1478.18),
+    [34]  = Vector3.new(-2252.42,  312.40,  1474.12),
+    [35]  = Vector3.new(-2338.13,  321.69,  1464.05),
+    [36]  = Vector3.new(-2411.78,  320.99,  1459.52),
+    [37]  = Vector3.new(-2522.24,  320.81,  1462.56),
+    [38]  = Vector3.new(-2414.97,  321.03,  1469.04),
+    [39]  = Vector3.new(-2519.90,  321.11,  1464.92),
+    [40]  = Vector3.new(-2600.69,  292.54,  1431.48),
+    [41]  = Vector3.new(-2719.42,  292.47,  1464.36),
+    [42]  = Vector3.new(-2784.77,  305.58,  1466.66),
+    [43]  = Vector3.new(-2857.88,  281.61,  1463.71),
+    [44]  = Vector3.new(-2963.18,  294.73,  1466.41),
+    [45]  = Vector3.new(-3379.22,  294.86,  1312.64),
+    [46]  = Vector3.new(-3941.47,  294.77,  1467.58),
+    [47]  = Vector3.new(-3993.40,  296.62,  1467.04),
+    [48]  = Vector3.new(-4111.57,  295.93,  1463.39),
+    [49]  = Vector3.new(-4189.66,  294.91,  1465.53),
+    [50]  = Vector3.new(-4296.35,  294.78,  1469.19),
+    [51]  = Vector3.new(-4318.19,  341.72,  1467.25),
+    [52]  = Vector3.new(-4317.15,  342.75,  1336.45),
+    [53]  = Vector3.new(-4290.84,  369.58,  1301.82),
+    [54]  = Vector3.new(-4186.50,  368.30,  1301.83),
+    [55]  = Vector3.new(-4160.22,  368.09,  1299.59),
+    [56]  = Vector3.new(-4054.53,  371.49,  1300.69),
+    [57]  = Vector3.new(-4023.93,  372.75,  1300.59),
+    [58]  = Vector3.new(-4010.91,  390.14,  1302.11),
+    [59]  = Vector3.new(-4010.17,  390.02,  1323.70),
+    [60]  = Vector3.new(-4009.61,  391.07,  1429.44),
+    [61]  = Vector3.new(-4007.98,  389.99,  1479.55),
+    [62]  = Vector3.new(-4009.44,  391.85,  1605.02),
+    [63]  = Vector3.new(-4132.71,  393.13,  1610.27),
+    [64]  = Vector3.new(-4173.70,  398.47,  1611.41),
+    [65]  = Vector3.new(-4305.85,  393.34,  1609.72),
+    [66]  = Vector3.new(-4348.86,  398.35,  1606.85),
+    [67]  = Vector3.new(-4347.85,  404.84,  1573.40),
+    [68]  = Vector3.new(-4349.75,  410.41,  1449.81),
+    [69]  = Vector3.new(-4346.63,  432.94,  1391.72),
+    [70]  = Vector3.new(-4236.80,  438.37,  1393.03),
+    [71]  = Vector3.new(-4110.80,  444.76,  1392.10),
+    [72]  = Vector3.new(-4050.58,  452.86,  1486.91),
+    [73]  = Vector3.new(-4099.10,  453.65,  1571.41),
+    [74]  = Vector3.new(-4182.92,  452.57,  1545.48),
+    [75]  = Vector3.new(-4271.44,  459.54,  1528.28),
+    [76]  = Vector3.new(-4360.53,  469.30,  1528.82),
+    [77]  = Vector3.new(-4576.91,  468.94,  1524.35),
+    [78]  = Vector3.new(-4579.20,  469.03,  1361.70),
+    [79]  = Vector3.new(-4541.39,  469.04,  1351.50),
+    [80]  = Vector3.new(-4476.23,  469.11,  1444.69),
+    [81]  = Vector3.new(-4460.66,  468.88,  1237.81),
+    [82]  = Vector3.new(-5334.84,  471.45,  1480.10),
+    [83]  = Vector3.new(-5390.51,  477.88,  1475.00),
+    [84]  = Vector3.new(-5661.25,  486.36,  1345.56),
+    [85]  = Vector3.new(-5890.54,  485.76,  1561.68),
+    [86]  = Vector3.new(-6184.42,  486.57,  1432.49),
+    [87]  = Vector3.new(-6489.12,  486.56,  1382.83),
+    [88]  = Vector3.new(-6808.15,  521.06,  1486.43),
+    [89]  = Vector3.new(-6876.91,  485.11,  1487.43),
+    [90]  = Vector3.new(-8351.15,  482.61,  1488.75),
+    [91]  = Vector3.new(-8582.61,  499.61,  1489.76),
+    [92]  = Vector3.new(-8812.84,  498.28,  1485.00),
+    [93]  = Vector3.new(-8903.78,  505.07,  1477.62),
+    [94]  = Vector3.new(-9149.24,  502.07,  1391.77),
+    [95]  = Vector3.new(-9646.63,  519.79,  1496.62),
+    [96]  = Vector3.new(-9902.89,  499.27,  1481.69),
+    [97]  = Vector3.new(-10148.67, 496.66,  1474.93),
+    [98]  = Vector3.new(-10296.97, 443.38,  1488.69),
+    [99]  = Vector3.new(-10363.26, 748.71,  3441.55),
+    [100] = Vector3.new(-10496.54, 749.04,  3625.08),
+    [101] = Vector3.new(-10912.08, 749.74,  3534.95),
+    [102] = Vector3.new(-10982.99, 753.74,  3610.81),
+    [103] = Vector3.new(-11282.49, 748.87,  3621.33),
+    [104] = Vector3.new(-11577.74, 755.45,  3535.33),
+    [105] = Vector3.new(-11852.11, 748.98,  3624.43),
+    [106] = Vector3.new(-12129.78, 748.70,  3544.56),
+    [107] = Vector3.new(-12269.37, 754.67,  3577.78),
+    [108] = Vector3.new(-13174.69, 756.49,  3586.83),
+    [109] = Vector3.new(-13402.11, 751.25,  3704.69),
+    [110] = Vector3.new(-13427.86, 748.83,  3351.56),
+    [111] = Vector3.new(-13619.84, 749.04,  3372.31),
+    [112] = Vector3.new(-13611.72, 748.85,  3217.20),
+    [113] = Vector3.new(-13891.98, 748.94,  3201.65),
+    [114] = Vector3.new(-13722.87, 748.78,  3480.43),
+    [115] = Vector3.new(-13722.81, 748.63,  3728.77),
+    [116] = Vector3.new(-14019.48, 749.10,  3957.65),
+    [117] = Vector3.new(-14002.25, 748.74,  3060.79),
+}
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  67 NAVIGATION WAYPOINTS (WORLD 2)                            │
+-- └──────────────────────────────────────────────────────────────┘
+local NAV_POINTS_W2 = {
+    [1]   = Vector3.new(-393.78, 504.10, 3.57),
+    [2]   = Vector3.new(-399.44, 504.10, 68.15),
+    [3]   = Vector3.new(-399.51, 504.10, 133.11),
+    [4]   = Vector3.new(-397.74, 500.17, 190.51),
+    [5]   = Vector3.new(-398.53, 500.17, 434.71),
+    [6]   = Vector3.new(-401.19, 500.03, 463.14),
+    [7]   = Vector3.new(-345.22, 500.03, 465.10),
+    [8]   = Vector3.new(-346.93, 527.10, 576.43),
+    [9]   = Vector3.new(-458.45, 527.10, 576.92),
+    [10]  = Vector3.new(-453.62, 554.10, 464.46),
+    [11]  = Vector3.new(-343.72, 554.10, 468.19),
+    [12]  = Vector3.new(-347.72, 581.17, 587.10),
+    [13]  = Vector3.new(-455.79, 581.17, 577.61),
+    [14]  = Vector3.new(-451.41, 608.17, 463.35),
+    [15]  = Vector3.new(-400.95, 608.17, 470.17),
+    [16]  = Vector3.new(-402.14, 607.96, 609.85),
+    [17]  = Vector3.new(-400.81, 606.51, 673.24),
+    [18]  = Vector3.new(-422.56, 607.49, 726.39),
+    [19]  = Vector3.new(-413.57, 608.16, 762.40),
+    [20]  = Vector3.new(-400.32, 607.20, 792.96),
+    [21]  = Vector3.new(-401.17, 605.55, 849.25),
+    [22]  = Vector3.new(-493.24, 605.65, 1050.45),
+    [23]  = Vector3.new(-405.74, 607.14, 1256.11),
+    [24]  = Vector3.new(-402.84, 616.85, 1330.35),
+    [25]  = Vector3.new(-400.11, 605.85, 1449.67),
+    [26]  = Vector3.new(-442.19, 627.17, 1543.60),
+    [27]  = Vector3.new(-442.21, 626.54, 1597.49),
+    [28]  = Vector3.new(-439.81, 603.81, 1711.89),
+    [29]  = Vector3.new(-437.77, 613.41, 1785.81),
+    [30]  = Vector3.new(-398.36, 605.79, 1881.03),
+    [31]  = Vector3.new(-405.40, 616.10, 1954.20),
+    [32]  = Vector3.new(-404.19, 606.94, 2052.68),
+    [33]  = Vector3.new(-400.97, 617.60, 2139.59),
+    [34]  = Vector3.new(-399.77, 606.90, 2225.23),
+    [35]  = Vector3.new(-401.25, 614.17, 2306.76),
+    [36]  = Vector3.new(-402.32, 621.66, 2405.20),
+    [37]  = Vector3.new(-402.97, 621.58, 3152.07),
+    [38]  = Vector3.new(-407.24, 622.37, 3324.25),
+    [39]  = Vector3.new(-189.20, 621.54, 3339.15),
+    [40]  = Vector3.new(-176.01, 621.69, 3213.33),
+    [41]  = Vector3.new(-104.27, 621.70, 3211.65),
+    [42]  = Vector3.new(-114.76, 621.55, 3444.74),
+    [43]  = Vector3.new(-266.70, 621.54, 3442.09),
+    [44]  = Vector3.new(-259.15, 621.64, 3613.39),
+    [45]  = Vector3.new(-97.13, 624.54, 3636.28),
+    [46]  = Vector3.new(-545.16, 621.80, 3603.72),
+    [47]  = Vector3.new(-523.39, 621.58, 3797.86),
+    [48]  = Vector3.new(-121.76, 621.65, 3795.44),
+    [49]  = Vector3.new(-45.55, 621.90, 3867.86),
+    [50]  = Vector3.new(1234.00, 622.08, 3864.75),
+    [51]  = Vector3.new(1329.46, 617.46, 3856.18),
+    [52]  = Vector3.new(1534.36, 624.77, 3799.81),
+    [53]  = Vector3.new(1757.34, 636.97, 3946.88),
+    [54]  = Vector3.new(1952.95, 631.81, 3797.59),
+    [55]  = Vector3.new(2102.46, 636.98, 3968.56),
+    [56]  = Vector3.new(2310.12, 619.19, 3851.81),
+    [57]  = Vector3.new(2405.93, 626.11, 3869.16),
+    [58]  = Vector3.new(2547.90, 637.88, 3874.86),
+    [59]  = Vector3.new(2710.73, 632.89, 3866.37),
+    [60]  = Vector3.new(2736.37, 573.96, 3873.29),
+    [61]  = Vector3.new(2845.64, 576.36, 3871.25),
+    [62]  = Vector3.new(2914.54, 602.48, 3878.90),
+    [63]  = Vector3.new(2970.05, 575.02, 3871.01),
+    [64]  = Vector3.new(3049.65, 590.54, 3868.71),
+    [65]  = Vector3.new(3187.09, 581.78, 3867.70),
+    [66]  = Vector3.new(3263.80, 590.89, 3871.81),
+    -- ── extended path past the old last waypoint (user-measured)  new win plate ──
+    [67]  = Vector3.new(3333.99, 574.85, 3890.57),
+    [68]  = Vector3.new(3333.77, 568.97, 4151.92),
+    [69]  = Vector3.new(3346.01, 574.29, 4582.24),
+    [70]  = Vector3.new(3355.16, 568.76, 4923.81),
+    [71]  = Vector3.new(3332.62, 572.98, 5122.75),
+    [72]  = Vector3.new(3504.15, 572.61, 5138.30),
+    [73]  = Vector3.new(3711.35, 569.33, 5139.18),
+    [74]  = Vector3.new(3968.89, 568.14, 5154.62),
+    [75]  = Vector3.new(4200.40, 567.81, 5143.81),
+    [76]  = Vector3.new(4549.88, 565.96, 5142.16),
+    [77]  = Vector3.new(4637.83, 568.26, 5140.58),   -- win plate @ (4634.11, 565.74, 5159.41)
+    [78]  = Vector3.new(4698.36, 570.34, 5142.04),
+    [79]  = Vector3.new(4897.21, 565.34, 5137.18),
+    [80]  = Vector3.new(4915.48, 569.28, 5024.38),
+    [81]  = Vector3.new(4917.35, 671.76, 5019.72),
+    [82]  = Vector3.new(4917.18, 675.40, 5032.47),
+    [83]  = Vector3.new(4915.79, 675.56, 5056.18),
+    [84]  = Vector3.new(4794.73, 672.83, 5036.81),
+    [85]  = Vector3.new(4678.79, 673.04, 5040.39),
+    [86]  = Vector3.new(4677.12, 674.72, 5140.20),
+    [87]  = Vector3.new(4675.96, 673.13, 5251.20),
+    [88]  = Vector3.new(4870.57, 617.61, 5239.17),
+    [89]  = Vector3.new(4896.21, 676.48, 5239.21),
+    [90]  = Vector3.new(4992.78, 672.65, 5238.45),
+}
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  DYNAMIC NAV POINTS (Switches between W1 and W2)              │
+-- └──────────────────────────────────────────────────────────────┘
+local NAV_POINTS = NAV_POINTS_W1
+
+-- Special waypoint conditions
+local SPECIAL_WAYPOINTS = {
+    [3] = {
+        type = "wait_despawn",
+        objects = {"workspace.NPC & Piege.Ball1", "workspace.NPC & Piege.Ball1.BallEnd", "workspace.NPC & Piege.Ball1.BallSpawn", "workspace.NPC & Piege.Ball1.KillBall"}
+    },
+    [15] = {
+        type = "wait_timer",
+        object = "workspace.Keycaps.Bridge.Bridge1.Timer"
+},
+    [17] = {
+        type = "wait_tsunami",
+        tsunami = "workspace.NPC & Piege.Tsunami1.Tsunami",
+        timerPart = "workspace.NPC & Piege.Tsunami1.TimerPart",
+        safeOffset = Vector3.new(0, 0, -50)
+    },
+    [18] = {
+        type = "wait_walls",
+        wallR = "workspace.NPC & Piege.CorridorTrap.WallR",
+        wallL = "workspace.NPC & Piege.CorridorTrap.WallL"
+},
+    [19] = {
+        type = "wait_lava",
+        lavaPart = "workspace.NPC & Piege.LavaTower.LavaPart"
+}
+}
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  WIN PLATE CONFIGS  (name + exact measured position)          │
+-- └──────────────────────────────────────────────────────────────┘
+-- WORLD 1
+local STAGE_WIN_CFG_W1 = {
+    [2]  = {blockName="WinBlock1",  pos=Vector3.new(-13.08,  7.09,   285.97),  navEnd=1,  idx=1},
+    [3]  = {blockName="WinBlock2",  pos=Vector3.new(-18.20,  6.97,   506.08),  navEnd=3,  idx=2},
+    [4]  = {blockName="WinBlock3",  pos=Vector3.new(-21.92,  75.48,  775.10),  navEnd=6,  idx=3},
+    [5]  = {blockName="WinBlock4",  pos=Vector3.new(-17.59,  77.15,  1108.09), navEnd=14, idx=4},
+    [6]  = {blockName="WinBlock5",  pos=Vector3.new(-17.00,  77.15,  1410.50), navEnd=16, idx=5},
+    [7]  = {blockName="WinBlock6",  pos=Vector3.new(-538.71, 54.50,  1448.86), navEnd=18, idx=6},
+    [8]  = {blockName="WinBlock7",  pos=Vector3.new(-1006.55,54.50,  1446.33), navEnd=19, idx=7},
+    [9]  = {blockName="WinBlock8",  pos=Vector3.new(-1123.36,296.50, 1446.81), navEnd=22, idx=8},
+    [10] = {blockName="WinBlock9",  pos=Vector3.new(-2971.33,294.83, 1451.09), navEnd=44, idx=9},
+    [11] = {blockName="WinBlock10", pos=Vector3.new(-3939.07,294.75, 1446.75), navEnd=46, idx=10},
+    [12] = {blockName="WinBlock11", pos=Vector3.new(-4366.96,469.19, 1512.57), navEnd=76, idx=11},
+    [13] = {blockName="WinBlock12", pos=Vector3.new(-5340.19,468.98, 1459.09), navEnd=82, idx=12},
+    [14] = {blockName="WinBlock13", pos=Vector3.new(-6811.16,519.87, 1463.58), navEnd=88, idx=13},
+    [15] = {blockName="WinBlock14", pos=Vector3.new(-8353.26,482.85, 1469.17), navEnd=90, idx=14},
+    [16] = {blockName="WinBlock15", pos=Vector3.new(-14002.25,748.74, 3060.79), navEnd=117, idx=15},
+}
+
+-- WORLD 2
+local STAGE_WIN_CFG_W2 = {
+    [2]  = {blockName="WinBlock1",  pos=Vector3.new(-415.59, 500.17, 189.73),  navEnd=4,  idx=1},
+    [3]  = {blockName="WinBlock2",  pos=Vector3.new(-414.65, 500.17, 433.26),  navEnd=5,  idx=2},
+    [4]  = {blockName="WinBlock3",  pos=Vector3.new(-421.42, 607.96, 608.65),  navEnd=16, idx=3},
+    [5]  = {blockName="WinBlock4",  pos=Vector3.new(-418.35, 607.52, 842.52),  navEnd=21, idx=4},
+    [6]  = {blockName="WinBlock5",  pos=Vector3.new(-423.24, 605.81, 1264.59), navEnd=23, idx=5},
+    [7]  = {blockName="WinBlock6",  pos=Vector3.new(-418.86, 621.68, 2415.46), navEnd=36, idx=6},
+    [8]  = {blockName="WinBlock7",  pos=Vector3.new(-417.08, 621.78, 2654.02), navEnd=37, idx=7},
+    [9]  = {blockName="WinBlock8",  pos=Vector3.new(-420.91, 621.69, 3156.99), navEnd=38, idx=8},
+    [10] = {blockName="WinBlock9",  pos=Vector3.new(-57.21, 621.81, 3885.96),  navEnd=50, idx=9},
+    [11] = {blockName="WinBlock10", pos=Vector3.new(1228.70, 622.00, 3914.47), navEnd=51, idx=10},
+    [12] = {blockName="WinBlock11", pos=Vector3.new(2403.07, 626.10, 3893.72), navEnd=58, idx=11},
+    [13] = {blockName="WinBlock12", pos=Vector3.new(3265.73, 590.95, 3884.56), navEnd=67, idx=12},
+    [14] = {blockName="WinBlock13", pos=Vector3.new(4634.11, 565.74, 5159.41), navEnd=77, idx=13},
+}
+
+local STAGE_WIN_CFG = STAGE_WIN_CFG_W1
+
+local function getStageByNum(n)
+    for _,s in ipairs(STAGES) do
+        if s.n == n then return s end
+    end
+    return STAGES[1]
+end
+
+local function getBestStage()
+    local wins = tonumber((getState()).Wins) or 0
+    local best = STAGES[1]
+    for _,s in ipairs(STAGES) do
+        if wins >= s.req then best = s end
+    end
+    return best
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  CFG                                                          │
+-- └──────────────────────────────────────────────────────────────┘
+local Cfg = {
+    Fly          = false, FlySpeed     = 300,
+    InfiniteJump = false,
+    Noclip       = false,
+    SpeedHack    = false, WalkSpeed    = 50,
+    LowGravity   = false,
+    World        = "World 1",
+    AutoWin      = false, WinDelay     = 0.3, WinTweenSpeed = 2000,
+    AutoWinTargetStage = 2,   -- Stage number to farm (2-15)
+    AutoWinTargetCount = 0,   -- 0 = infinite, otherwise stop after N wins
+    sessionWinTarget   = 0,   -- internal counter for this run
+    AutoRebirth  = false,
+    VoidPlatform = false, PlatformOffset = 4.5,
+    MonsterESP   = false,
+    DeleteObstacles = false,
+    TsunamiGuard = false, GoldTreadmill = false,
+    NoTexture    = false,
+    AutoWalkCircle = false, WalkCircleRadius = 15, WalkCircleSpeed = 3,
+    sessionWins  = 0, sessionStart = os.time(),
+}
+
+-- Unload state: every worker loop checks _DEAD, leaked connections are tracked in _conns
+local _DEAD = false
+local _conns = {}
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  FLY SYSTEM                                                   │
+-- └──────────────────────────────────────────────────────────────┘
+local FlyBV, FlyBG, FlyConn
+local FlyToggleRef
+
+local function StartFly()
+    local root=getRoot(); local hum=getHum()
+    if not root or not hum then return end
+    if FlyBV then FlyBV:Destroy() end
+    if FlyBG then FlyBG:Destroy() end
+    if FlyConn then FlyConn:Disconnect() end
+    hum.PlatformStand = true
+    FlyBG = Instance.new("BodyGyro")
+    FlyBG.MaxTorque = Vector3.new(9e9,9e9,9e9)
+    FlyBG.P         = 5e4
+    FlyBG.CFrame    = root.CFrame
+    FlyBG.Parent    = root
+    FlyBV = Instance.new("BodyVelocity")
+    FlyBV.MaxForce  = Vector3.new(9e9,9e9,9e9)
+    FlyBV.Velocity  = Vector3.zero
+    FlyBV.Parent    = root
+    FlyConn = RunService.RenderStepped:Connect(function()
+        if not Cfg.Fly then return end
+        local cam=Camera.CFrame; local spd=Cfg.FlySpeed; local vel=Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W)           then vel+=cam.LookVector *spd end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S)           then vel-=cam.LookVector *spd end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A)           then vel-=cam.RightVector*spd end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D)           then vel+=cam.RightVector*spd end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then vel+=Vector3.yAxis  *spd end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vel-=Vector3.yAxis  *spd end
+        FlyBV.Velocity=vel; FlyBG.CFrame=cam
+    end)
+end
+
+local function StopFly()
+    Cfg.Fly=false
+    if FlyToggleRef then pcall(function() FlyToggleRef:SetValue(false) end) end
+    if FlyConn then FlyConn:Disconnect(); FlyConn=nil end
+    if FlyBV   then FlyBV:Destroy();     FlyBV=nil   end
+    if FlyBG   then FlyBG:Destroy();     FlyBG=nil   end
+    local hum=getHum()
+    if hum then hum.PlatformStand=false; hum:ChangeState(Enum.HumanoidStateType.Running) end
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  NOCLIP (travel + toggle)                                     │
+-- └──────────────────────────────────────────────────────────────┘
+local noclipConn
+local function enableNoclip()
+    if noclipConn then noclipConn:Disconnect() end
+    noclipConn = RunService.Stepped:Connect(function()
+        local c=getChar(); if not c then return end
+        for _,p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide=false end
+        end
+    end)
+end
+local function disableNoclip()
+    if noclipConn then noclipConn:Disconnect(); noclipConn=nil end
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  VOID PLATFORM — Solid Anchored Neon Block                    │
+-- └──────────────────────────────────────────────────────────────┘
+local voidPlatform
+
+local function removeVoidPlatform()
+    if voidPlatform then voidPlatform:Destroy(); voidPlatform = nil end
+end
+
+local function createVoidPlatform()
+    removeVoidPlatform()
+    local root = getRoot(); if not root then return end
+
+    local p = Instance.new("Part")
+    p.Name          = "VoidPlatform"
+p.Size          = Vector3.new(45, 1.2, 45)
+    p.Anchored      = true
+    p.CanCollide    = true
+    p.CanTouch      = false
+    p.Transparency  = 0.45
+    p.BrickColor    = BrickColor.new("Cyan")
+    p.Material      = Enum.Material.Neon
+    p.CastShadow    = false
+    p.CFrame        = CFrame.new(root.Position.X, root.Position.Y - Cfg.PlatformOffset, root.Position.Z)
+    p.Parent        = workspace
+
+    voidPlatform = p
+end
+
+table.insert(_conns, RunService.Heartbeat:Connect(function()
+    if not Cfg.VoidPlatform then return end
+    local root = getRoot(); if not root then return end
+    if not voidPlatform or not voidPlatform.Parent then
+        createVoidPlatform(); return
+    end
+    voidPlatform.CFrame = CFrame.new(root.Position.X, root.Position.Y - Cfg.PlatformOffset, root.Position.Z)
+end))
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  MONSTER ESP                                                 │
+-- └──────────────────────────────────────────────────────────────┘
+local espGuis       = {}
+local monsterAddedConn
+
+local function clearESP()
+    if monsterAddedConn then monsterAddedConn:Disconnect(); monsterAddedConn = nil end
+    for _,g in pairs(espGuis) do pcall(function() g:Destroy() end) end
+    espGuis = {}
+end
+
+local function addESPToModel(model)
+    if espGuis[model] then return end
+    local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+    if not root then return end
+
+    -- Resolve display name: try Humanoid.DisplayName  model.Name  "Monster"
+local hum = model:FindFirstChildOfClass("Humanoid")
+    local label = ""
+pcall(function()
+        if hum and hum.DisplayName and hum.DisplayName ~= "" then
+            label = hum.DisplayName
+        elseif model.Name and model.Name ~= "" then
+            label = model.Name
+        else
+            label = "Monster"
+end
+    end)
+    if label == "" then label = "Monster" end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Name            = "MonsterESP"
+bb.Size            = UDim2.new(0,140,0,28)
+    bb.StudsOffset     = Vector3.new(0,4.5,0)
+    bb.AlwaysOnTop     = true
+    bb.Adornee         = root
+    bb.Parent          = root
+
+    local bg = Instance.new("Frame")
+    bg.Size                   = UDim2.new(1,0,1,0)
+    bg.BackgroundColor3       = Color3.fromRGB(18,18,18)
+    bg.BackgroundTransparency = 0.3
+    bg.BorderSizePixel        = 0
+    bg.Parent                 = bb
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0,4)
+    corner.Parent       = bg
+
+    local nameL = Instance.new("TextLabel")
+    nameL.Size                  = UDim2.new(1,0,1,0)
+    nameL.BackgroundTransparency= 1
+    nameL.TextColor3            = Color3.fromRGB(255,70,70)
+    nameL.TextScaled            = true
+    nameL.Font                  = Enum.Font.GothamBold
+    nameL.Text                  = label
+    nameL.Parent                = bg
+
+    espGuis[model] = bb
+end
+
+local function setupMonsterESPListener()
+    if monsterAddedConn then monsterAddedConn:Disconnect() end
+    monsterAddedConn = workspace.DescendantAdded:Connect(function(obj)
+        if not Cfg.MonsterESP then return end
+        task.wait(0.5)
+        if obj:IsA("Model") and not isPlayerChar(obj) then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hum and hum.MaxHealth > 0 then
+                addESPToModel(obj)
+            end
+        end
+    end)
+end
+
+local function refreshMonsterESP()
+    clearESP()
+    if not Cfg.MonsterESP then return end
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and not isPlayerChar(obj) then
+            local hum = obj:FindFirstChildOfClass("Humanoid")
+            if hum and hum.MaxHealth > 0 then
+                addESPToModel(obj)
+            end
+        end
+    end
+    setupMonsterESPListener()
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  DELETE OBSTACLES (lava / kill / hazard bypass)               │
+-- └──────────────────────────────────────────────────────────────┘
+local obstacleDisabledParts = {}
+
+local OBSTACLE_KEYWORDS = {"lava","kill","hazard","acid","poison","spike","death","void","fire","burn","toxic"}
+
+local function isObstaclePart(part)
+    if not part:IsA("BasePart") then return false end
+    local n = part.Name:lower()
+    for _,kw in ipairs(OBSTACLE_KEYWORDS) do
+        if n:find(kw) then return true end
+    end
+    -- Also check parent name
+    if part.Parent then
+        local pn = part.Parent.Name:lower()
+        for _,kw in ipairs(OBSTACLE_KEYWORDS) do
+            if pn:find(kw) then return true end
+        end
+    end
+    return false
+end
+
+-- PRECISE World-2 obstacle list (user-specified). Removes ONLY these, never the whole map.
+local function disableWorld2Traps()
+    pcall(function()
+        local function killChild(parent, ...)
+            local node = parent
+            for _, seg in ipairs({ ... }) do
+                if not node then return end
+                node = node:FindFirstChild(seg)
+            end
+            if node then pcall(function() node:Destroy() end) end
+        end
+        local w2 = workspace:FindFirstChild("WORLD 2")
+        local pl = workspace:FindFirstChild("Pieges & Lava")
+        local np = workspace:FindFirstChild("NPC & Piege")
+        if w2 then
+            killChild(w2, "Stage2", "MovingWalls")
+            -- Stage2 child #6 (exact index the user flagged)
+            local s2 = w2:FindFirstChild("Stage2")
+            if s2 then local c6 = s2:GetChildren()[6]; if c6 then pcall(function() c6:Destroy() end) end end
+            -- Stage8 ventilateurs: clear every fan (covers indexes 2-9 + "Ventilateur")
+            local s8 = w2:FindFirstChild("Stage8")
+            local vent = s8 and s8:FindFirstChild("Ventilateurs")
+            if vent then for _, f in ipairs(vent:GetChildren()) do pcall(function() f:Destroy() end) end end
+        end
+        if pl then
+            killChild(pl, "Lava_Stage3")
+            killChild(pl, "Twomps")
+        end
+        if np then
+            killChild(np, "Tsunami1")
+            killChild(np, "Tsunami2")
+        end
+        killChild(workspace, "NPC_MacaronMonster")
+        killChild(workspace, "NPC9")
+    end)
+end
+
+local function applyDeleteObstacles()
+    local count = 0
+    if Cfg.World == "World 2" then disableWorld2Traps() return 0 end  -- W2: precise list ONLY
+    for _,part in ipairs(workspace:GetDescendants()) do
+        if isObstaclePart(part) then
+            pcall(function()
+                if not obstacleDisabledParts[part] then
+                    obstacleDisabledParts[part] = {CanTouch=part.CanTouch, CanCollide=part.CanCollide, Transparency=part.Transparency}
+                end
+                part.CanTouch      = false
+                part.CanCollide    = false
+                part.Transparency  = 0.75
+                count = count + 1
+            end)
+        end
+    end
+    return count
+end
+
+local function restoreObstacles()
+    for part,saved in pairs(obstacleDisabledParts) do
+        pcall(function()
+            part.CanTouch   = saved.CanTouch
+            part.CanCollide = saved.CanCollide
+            part.Transparency = saved.Transparency
+        end)
+    end
+    obstacleDisabledParts = {}
+end
+
+-- Continuous obstacle watcher (catches newly loaded parts)
+task.spawn(function()
+    while not _DEAD do
+        task.wait(0.5)
+        if Cfg.DeleteObstacles then
+            pcall(applyDeleteObstacles)
+        end
+    end
+end)
+
+table.insert(_conns, workspace.DescendantAdded:Connect(function(obj)
+    if not Cfg.DeleteObstacles then return end
+    if Cfg.World == "World 2" then return end  -- W2 handled by the precise list loop
+    task.wait(0.1)
+    if isObstaclePart(obj) then
+        pcall(function()
+            obj.CanTouch   = false
+            obj.CanCollide = false
+            obj.Transparency = 0.75
+        end)
+    end
+end))
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  TSUNAMI GUARD  (server-side kill  detect & ride above wave)  │
+-- └──────────────────────────────────────────────────────────────┘
+-- Deleting the tsunami won't save you (the kill is server-authoritative), so
+-- instead we watch the Tsunami union; when it sweeps toward you on your row we
+-- lift you above its crest until it passes, then let you drop back.
+local function getTsunamiWaves()
+    local np = workspace:FindFirstChild("NPC & Piege")
+    local list = {}
+    if np then
+        for _, nm in ipairs({ "Tsunami1", "Tsunami2" }) do
+            local t = np:FindFirstChild(nm)
+            local wave = t and t:FindFirstChild("Tsunami")
+            if wave and wave:IsA("BasePart") then list[#list + 1] = wave end
+        end
+    end
+    return list
+end
+
+task.spawn(function()
+    while not _DEAD do
+        task.wait(0.12)
+        if Cfg.TsunamiGuard then
+            pcall(function()
+                local root = getRoot(); if not root then return end
+                for _, wave in ipairs(getTsunamiWaves()) do
+                    local d = wave.Position - root.Position
+                    local flat = Vector2.new(d.X, d.Z).Magnitude
+                    local topY = wave.Position.Y + wave.Size.Y / 2
+                    -- danger: wave is near and at/above our height  ride over its crest
+                    if flat < (math.max(wave.Size.X, wave.Size.Z) / 2 + 28) and root.Position.Y < topY + 8 then
+                        root.CFrame = CFrame.new(root.Position.X, topY + 14, root.Position.Z)
+                        root.AssemblyLinearVelocity = Vector3.zero
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  GOLD TREADMILL  (gamepass feature — best-effort activation)   │
+-- └──────────────────────────────────────────────────────────────┘
+-- Normally a gamepass; we keep the client GoldTreadmillActive flag set so the
+-- gold step-rate applies locally. Payout may still be server-gated.
+task.spawn(function()
+    while not _DEAD do
+        task.wait(0.4)
+        if Cfg.GoldTreadmill then
+            pcall(function()
+                if ClientState and ClientState.Data then
+                    ClientState.Data.GoldTreadmillActive = true
+                end
+            end)
+        end
+    end
+end)
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  NO TEXTURE                                                   │
+-- └──────────────────────────────────────────────────────────────┘
+local savedTextures = {}
+
+local function applyNoTexture()
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        pcall(function()
+            if obj:IsA("Texture") or obj:IsA("Decal") then
+                savedTextures[obj] = obj.Transparency
+                obj.Transparency = 1
+            elseif obj:IsA("SpecialMesh") or obj:IsA("BlockMesh") then
+                savedTextures[obj] = obj.TextureId
+                obj.TextureId = ""
+elseif obj:IsA("BasePart") and not obj:IsA("UnionOperation") then
+                savedTextures[obj] = obj.Material
+                obj.Material = Enum.Material.SmoothPlastic
+            end
+        end)
+    end
+end
+
+local function restoreTextures()
+    for obj,val in pairs(savedTextures) do
+        pcall(function()
+            if obj:IsA("Texture") or obj:IsA("Decal") then
+                obj.Transparency = val
+            elseif obj:IsA("SpecialMesh") or obj:IsA("BlockMesh") then
+                obj.TextureId = val
+            elseif obj:IsA("BasePart") then
+                obj.Material = val
+            end
+        end)
+    end
+    savedTextures = {}
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  GROUND-FOLLOWING TWEEN  (v5.9)                               │
+-- │  • Stops Fly first so BodyVelocity can't fight the movement   │
+-- │  • Raycasts DOWN every ~15 studs to find keycap surface       │
+-- │  • Uses RenderStepped loop – sets CFrame every frame so       │
+-- │    physics CANNOT override it                                  │
+-- │  • Noclip ON so obstacles don't block the path                │
+-- └──────────────────────────────────────────────────────────────┘
+
+local GROUND_RAY_PARAMS = RaycastParams.new()
+GROUND_RAY_PARAMS.FilterType = Enum.RaycastFilterType.Exclude
+
+local function updateRayExclusion()
+    local c = getChar()
+    GROUND_RAY_PARAMS.FilterDescendantsInstances = c and {c} or {}
+end
+
+-- Build a list of waypoints with direct interpolation (no raycasting)
+-- Interpolates Y properly so the character follows ramps and slopes
+local function buildGroundWaypoints(startPos, targetPos)
+    local waypoints = {}
+    local dx = targetPos.X - startPos.X
+    local dz = targetPos.Z - startPos.Z
+    local dy = targetPos.Y - startPos.Y
+    local totalDist = math.sqrt(dx * dx + dz * dz + dy * dy)
+    local STEP  = 20   -- sample every 20 studs
+    local nSteps = math.max(2, math.ceil(totalDist / STEP))
+    
+    for i = 0, nSteps do
+        local t = i / nSteps
+        local wx = startPos.X + dx * t
+        local wy = startPos.Y + dy * t  -- Interpolate Y so we follow slopes
+        local wz = startPos.Z + dz * t
+        table.insert(waypoints, Vector3.new(wx, wy, wz))
+    end
+    -- Force exact destination as final waypoint
+    waypoints[#waypoints] = targetPos
+    return waypoints
+end
+
+-- Move the character through a single segment using a smooth TweenService tween.
+-- We tween a CFrameValue and apply it every frame, giving a fluid glide instead of a snap.
+-- dangerCheck: optional function() -> boolean, if returns true tween is cancelled immediately
+local function moveSegment(segFrom, segTo, speed, dangerCheck)
+    local dist = (segTo - segFrom).Magnitude
+    if dist < 0.05 then return true end
+    local duration = math.max(0.04, dist / speed)
+
+    local root = getRoot()
+    if not root then return false end
+
+    local cfValue = Instance.new("CFrameValue")
+    cfValue.Value = CFrame.new(segFrom)
+    cfValue.Parent = root
+
+    local tween = TweenService:Create(
+        cfValue,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut),
+        {Value = CFrame.new(segTo)}
+    )
+
+    local finished = false
+    local cancelled = false
+    tween.Completed:Connect(function()
+        finished = true
+    end)
+
+    -- Keep the HRP locked to the tweened value every frame
+    local conn = RunService.RenderStepped:Connect(function()
+        local r = getRoot()
+        if r then
+            r.CFrame = cfValue.Value
+        end
+    end)
+
+    tween:Play()
+
+    while not finished do
+        if dangerCheck and dangerCheck() then
+            cancelled = true
+            tween:Cancel()
+            break
+        end
+        task.wait()
+    end
+
+    conn:Disconnect()
+    cfValue:Destroy()
+    return not cancelled
+end
+
+-- Main public tween used by all stage-TP and player-TP buttons.
+local function tweenTo(targetPos, speed, onDone)
+    local root = getRoot()
+    if not root then if onDone then onDone() end return end
+    speed = speed or 500
+
+    task.spawn(function()
+        -- 1. Kill Fly so BodyVelocity/BodyGyro can't resist our movement
+        local wasFlying = Cfg.Fly
+        if Cfg.Fly then StopFly() end
+
+        -- 2. Noclip: phase through walls/obstacles
+        enableNoclip()
+
+        -- 3. Build waypoints that hug the keycap surface
+        local startPos = getRoot() and getRoot().Position or root.Position
+        local waypoints = buildGroundWaypoints(startPos, targetPos)
+
+        -- 4. Move segment-by-segment via RenderStepped (physics-proof)
+        for i = 2, #waypoints do
+            local r = getRoot()
+            if not r then break end
+            moveSegment(r.Position, waypoints[i], speed)
+        end
+
+        -- 5. Cleanup
+        disableNoclip()
+        -- Restore fly if it was active before the tween
+        if wasFlying then
+            Cfg.Fly = true
+            StartFly()
+        end
+
+        if onDone then onDone() end
+    end)
+end
+
+-- ┌──────────────────────────────────────────────────────────────┐
+-- │  AUTO WIN v6.0 — Pathfinding via 69 navigation waypoints     │
+-- │  Ground-following tween · Per-stage target · Win count limit  │
+-- └──────────────────────────────────────────────────────────────┘
+
+-- Search workspace for a WinBlock near a given position
+local function findWinBlockNear(pos, radius)
+    local best, bestD = nil, radius or 200
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local n = obj.Name:lower()
+            if n:find("win") or n:find("trophy") or n:find("finish") or n:find("goal") or n:find("checkpoint") or n:find("end") then
+                local d = (obj.Position - pos).Magnitude
+                if d < bestD then bestD = d; best = obj end
+            end
+        end
+    end
+    return best
+end
+
+-- Find the exact WinBlock by name for a given stage
+local function findWinBlockForStage(stageNum)
+    local cfg = (Cfg.World == "World 2" and STAGE_WIN_CFG_W2 or STAGE_WIN_CFG_W1)[stageNum]
+    if not cfg then return nil end
+    local maxPosDist = 120
+    -- First: search by exact name (case-insensitive) + position check
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name:lower() == cfg.blockName:lower() then
+            if (obj.Position - cfg.pos).Magnitude <= maxPosDist then
+                return obj
+            end
+        end
+    end
+    -- Second: search by partial name match + position check
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name:lower():find(cfg.blockName:lower()) then
+            if (obj.Position - cfg.pos).Magnitude <= maxPosDist then
+                return obj
+            end
+        end
+    end
+    -- Third: search by proximity with larger radius
+    return findWinBlockNear(cfg.pos, 150)
+end
+
+-- Simulate a physical landing to satisfy server anti-cheat
+local function simulateLanding(root, hum)
+    pcall(function()
+        if FlyBV then FlyBV.Velocity = Vector3.zero end
+        disableNoclip()
+        if root:FindFirstChildOfClass("BodyVelocity") then
+            root:FindFirstChildOfClass("BodyVelocity").Velocity = Vector3.zero
+        end
+        root.AssemblyLinearVelocity  = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        if hum then
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Landed) end)
+        end
+        task.wait(0.08)
+        enableNoclip()
+    end)
+end
+
+-- Navigate through NAV_POINTS from startIdx to endIdx using ground-following tween
+local function navigateNavPoints(startIdx, endIdx, speed, dangerCheck, winPos)
+    local CURRENT_NAV = Cfg.World == "World 2" and NAV_POINTS_W2 or NAV_POINTS_W1
+    -- World 2: simple navigation without special waypoint checks
+    local useSpecialWaypoints = (Cfg.World ~= "World 2")
+    
+    for i = startIdx, endIdx do
+        if not Cfg.AutoWin then return end
+        local r = getRoot()
+        if not r then return end
+        local target = CURRENT_NAV[i]
+        if not target then continue end
+
+        -- If this is the last nav point, adjust it to avoid overshooting the WinBlock
+        if i == endIdx and endIdx > startIdx and winPos then
+            local A = CURRENT_NAV[endIdx - 1]
+            local B = CURRENT_NAV[endIdx]
+            local AB = B - A
+            local AW = winPos - A
+            local abMagSq = AB.X*AB.X + AB.Y*AB.Y + AB.Z*AB.Z
+            if abMagSq > 0.0001 then
+                local t = (AW.X*AB.X + AW.Y*AB.Y + AW.Z*AB.Z) / abMagSq
+                if t < 1.0 then
+                    target = A + AB * math.max(0, t)
+                end
+            end
+        end
+
+        -- LADDER / VERTICAL CLIMB DETECTION
+        -- When next nav point is way above/below (>100 studs Y diff), treat as ladder.
+        -- Move horizontally first, then teleport straight up (noclip handles collision).
+        local dy = math.abs(target.Y - r.Position.Y)
+        local isWorldTransition = (r.Position.Y < 150 and target.Y > 400)
+        if dy > 100 and not isWorldTransition then
+            -- Step 1: move horizontally to align with ladder base at current Y
+            local ladderBase = Vector3.new(target.X, r.Position.Y, target.Z)
+            local horizWps = buildGroundWaypoints(r.Position, ladderBase)
+            for j = 2, #horizWps do
+                if not Cfg.AutoWin then return end
+                local cr = getRoot()
+                if not cr then return end
+                moveSegment(cr.Position, horizWps[j], speed, dangerCheck)
+            end
+            -- Step 2: teleport straight up to the top (ladder climb)
+            local cr2 = getRoot()
+            if cr2 then
+                local topPos = Vector3.new(target.X, target.Y, target.Z)
+                moveSegment(cr2.Position, topPos, speed * 2)
+                task.wait(0.1)
+            end
+            -- Skip to next nav point
+            continue
+        end
+
+        -- Build ground-hugging waypoints between current pos and next nav point
+        local wps = buildGroundWaypoints(r.Position, target)
+        for j = 2, #wps do
+            if not Cfg.AutoWin then return end
+            local cr = getRoot()
+            if not cr then return end
+            local ok = moveSegment(cr.Position, wps[j], speed, dangerCheck)
+            if not ok and dangerCheck then
+                -- Danger detected mid-segment: wait for safe then retry this segment
+                local stuckTimer = 0
+                while dangerCheck() and Cfg.AutoWin do
+                    task.wait(0.1)
+                    stuckTimer = stuckTimer + 0.1
+                    -- If stuck >25s, abort this nav attempt
+                    if stuckTimer > 25 then return end
+                end
+                if not Cfg.AutoWin then return end
+                j = j - 1 -- retry same segment
+            end
+        end
+
+        -- Check for special waypoint conditions AFTER arriving at the waypoint target position
+        local special = nil
+        if useSpecialWaypoints then
+            special = SPECIAL_WAYPOINTS[i]
+        end
+        if special then
+            if special.type == "wait_despawn" then
+                -- Wait for ball objects to despawn
+                local allDespawned = false
+                local timeout = 10
+                local startWait = os.clock()
+                while not allDespawned and (os.clock() - startWait) < timeout do
+                    allDespawned = true
+                    for _, objPath in ipairs(special.objects) do
+                        local obj = workspace:FindFirstChild(objPath:match("NPC & Piege") and "NPC & Piege" or objPath:split(".")[1])
+                        if obj then
+                            local parts = objPath:split(".")
+                            local current = obj
+                            for k = 2, #parts do
+                                current = current and current:FindFirstChild(parts[k])
+                            end
+                            if current then
+                                allDespawned = false
+                                break
+                            end
+                        end
+                    end
+                    if not allDespawned then task.wait(0.1) end
+                end
+            elseif special.type == "wait_timer" then
+                -- Stage 5 bridge timer: wait until the timer resets (value becomes high) to cross safely
+                local bridge = workspace:FindFirstChild("Keycaps") and workspace.Keycaps:FindFirstChild("Bridge") and workspace.Keycaps.Bridge:FindFirstChild("Bridge1")
+                local timerPart = bridge and bridge:FindFirstChild("Timer")
+                if timerPart then
+                    local startWait = os.clock()
+                    local isSafe = false
+                    while (os.clock() - startWait) < 15 and not isSafe and Cfg.AutoWin do
+                        pcall(function()
+                            -- 1. If Timer itself is a ValueBase (IntValue/NumberValue)
+                            if timerPart:IsA("ValueBase") then
+                                local val = tonumber(timerPart.Value)
+                                if val and val > 1 then
+                                    isSafe = true
+                                end
+                            else
+                                -- 2. Check for direct child ValueBases or types
+                                local timerVal = timerPart:FindFirstChild("Value") or timerPart:FindFirstChild("Time") or timerPart:FindFirstChild("Timer") or timerPart:FindFirstChildOfClass("NumberValue") or timerPart:FindFirstChildOfClass("IntValue")
+                                if timerVal and timerVal:IsA("ValueBase") then
+                                    local val = tonumber(timerVal.Value)
+                                    if val and val > 1 then
+                                        isSafe = true
+                                    end
+                                else
+                                    -- 3. Check for TextLabel in billboard/surface/children
+                                    local textLabel = timerPart:FindFirstChildOfClass("TextLabel") 
+                                        or timerPart:FindFirstChildOfClass("TextBox") 
+                                        or (timerPart:FindFirstChild("BillboardGui") and timerPart.BillboardGui:FindFirstChildOfClass("TextLabel"))
+                                        or (timerPart:FindFirstChild("SurfaceGui") and timerPart.SurfaceGui:FindFirstChildOfClass("TextLabel"))
+                                        or timerPart:FindFirstChildWhichIsA("TextLabel", true) -- Recursive search
+                                    if textLabel then
+                                        local num = tonumber(textLabel.Text:match("%d+"))
+                                        if num and num > 1 then
+                                            isSafe = true
+                                        end
+                                    else
+                                        -- 4. Check color fallback (green usually means safe/active)
+                                        if timerPart:IsA("BasePart") and timerPart.Color.G > 0.6 then
+                                            isSafe = true
+                                        end
+                                    end
+                                end
+                            end
+                        end)
+                        if not isSafe then task.wait(0.05) end -- 0.05s check for instant reaction
+                    end
+                else
+                    task.wait(0.1)
+                end
+            elseif special.type == "wait_tsunami" then
+                -- Stage 67: Bulletproof tsunami crossing
+                -- LIVE DATA CYCLE (~7 seconds):
+                --  1. Tsunami moves left: X=220  X=-460, timer 5.00.1
+                --  2. RESET: tsunami teleports to X≈220, timer resets to 5.0
+                --  3. Tsunami immediately starts moving left again
+                -- SAFE WINDOW: right after reset when tsX > 150 (spawn zone)
+                -- DANGER: tsX between 120 and -550 (bridge zone)
+                -- MUST cross IMMEDIATELY after reset — waiting kills you
+                local CURRENT_NAV = Cfg.World == "World 2" and NAV_POINTS_W2 or NAV_POINTS_W1
+                local p17 = CURRENT_NAV[17]
+                local p18 = CURRENT_NAV[18]
+
+                local function getTsunami()
+                    local tsParent = workspace:FindFirstChild("NPC & Piege")
+                    local tsObj = tsParent and tsParent:FindFirstChild("Tsunami1")
+                    return tsObj and tsObj:FindFirstChild("Tsunami")
+                end
+
+                local function getTimer()
+                    local tsParent = workspace:FindFirstChild("NPC & Piege")
+                    local tsObj = tsParent and tsParent:FindFirstChild("Tsunami1")
+                    local timerPart = tsObj and tsObj:FindFirstChild("TimerPart")
+                    local timerGui = timerPart and timerPart:FindFirstChild("StageGui")
+                    return timerGui and timerGui:FindFirstChild("Timer")
+                end
+
+                -- Wait for the RESET moment: tsunami in spawn zone (X > 150)
+                -- After reset, timer is high (~5.0) and tsunami is at X≈220
+                local function isSpawnZone()
+                    local tsunami = getTsunami()
+                    if not tsunami or not tsunami:IsA("BasePart") then return false end
+                    return tsunami.Position.X > 150
+                end
+
+                local function isBridgeZone()
+                    local tsunami = getTsunami()
+                    if not tsunami or not tsunami:IsA("BasePart") then return false end
+                    local tsX = tsunami.Position.X
+                    return tsX <= 150 and tsX >= -500
+                end
+
+                -- Wait for spawn zone with quick confirmation (only 3 frames = 0.3s)
+                local ready = false
+                while Cfg.AutoWin and not ready do
+                    local spawnCount = 0
+                    for _ = 1, 3 do
+                        if isSpawnZone() then
+                            spawnCount = spawnCount + 1
+                        else
+                            spawnCount = 0
+                        end
+                        task.wait(0.1)
+                    end
+                    if spawnCount >= 3 then ready = true end
+                    -- If bridge zone active, wait for next cycle
+                    if isBridgeZone() then
+                        -- Wait until tsunami passes or resets
+                        local waitStart = os.clock()
+                        while isBridgeZone() and (os.clock() - waitStart) < 8 and Cfg.AutoWin do
+                            task.wait(0.1)
+                        end
+                    end
+                end
+                if not Cfg.AutoWin then return end
+
+                -- CROSS IMMEDIATELY at MAX SPEED
+                -- Total bridge distance ~539 studs, at 2500 studs/s = 0.22s
+                -- Tsunami takes ~0.5s to reach bridge from spawn  we have time
+                local totalDist = (p18 - p17).Magnitude
+                local crossSpeed = math.min(Cfg.WinTweenSpeed or 2000, 2500)
+
+                local function isTsunamiDanger()
+                    local tsunami = getTsunami()
+                    if not tsunami or not tsunami:IsA("BasePart") then return false end
+                    local r = getRoot()
+                    if not r then return false end
+                    local tsX = tsunami.Position.X
+                    local dist = (tsunami.Position - r.Position).Magnitude
+                    -- Danger if tsunami is close to player
+                    if dist < 100 then return true end
+                    -- Danger if tsunami entered bridge zone and is approaching player
+                    if tsX <= 120 and tsX > r.Position.X - 50 then return true end
+                    return false
+                end
+
+                -- Single fast tween across the bridge with danger check
+                local r = getRoot()
+                if r then
+                    local ok = moveSegment(r.Position, p18, crossSpeed, isTsunamiDanger)
+                    if not ok then
+                        -- Danger hit: retreat and wait for next reset cycle
+                        local r2 = getRoot()
+                        if r2 then moveSegment(r2.Position, p17, crossSpeed) end
+                    end
+                end
+            elseif special.type == "wait_walls" then
+                -- Stage 78: single fast tween across corridor with retry loop
+                local function getWalls()
+                    local tr = workspace:FindFirstChild("NPC & Piege")
+                    local trap = tr and tr:FindFirstChild("CorridorTrap")
+                    return trap and trap:FindFirstChild("WallR"), trap and trap:FindFirstChild("WallL")
+                end
+                local function checkWallsSafe()
+                    local wr, wl = getWalls()
+                    if not wr or not wl or not wr.Parent or not wl.Parent then return false end
+                    if (wr.Position - wl.Position).Magnitude < 100 then return false end
+                    return true
+                end
+                local function isWallDanger()
+                    local wr, wl = getWalls()
+                    if not wr or not wl then return false end
+                    if (wr.Position - wl.Position).Magnitude < 80 then return true end
+                    return false
+                end
+
+                local CURRENT_CFG = Cfg.World == "World 2" and STAGE_WIN_CFG_W2 or STAGE_WIN_CFG_W1
+                local CURRENT_NAV = Cfg.World == "World 2" and NAV_POINTS_W2 or NAV_POINTS_W1
+                local winCfg = CURRENT_CFG[Cfg.AutoWinTargetStage or 2]
+                if winCfg and winCfg.pos.X < -800 and Cfg.AutoWin then
+                    local stageTarget = Cfg.AutoWinTargetStage or 2
+                    -- For Stage 8, cross directly to win block so we never overshoot p19
+                    local crossTarget = (stageTarget == 8 and winCfg.pos) or CURRENT_NAV[19]
+                    local crossSpeed = math.min(Cfg.WinTweenSpeed or 2000, 2200)
+                    -- Retry loop
+                    while Cfg.AutoWin do
+                        -- Wait for walls to open (5 consecutive frames = 0.5s)
+                        local consecutiveSafe = 0
+                        while Cfg.AutoWin do
+                            if checkWallsSafe() then
+                                consecutiveSafe = consecutiveSafe + 1
+                            else
+                                consecutiveSafe = 0
+                            end
+                            if consecutiveSafe >= 5 then break end
+                            task.wait(0.1)
+                        end
+                        if not Cfg.AutoWin then return end
+
+                        local cr = getRoot()
+                        if not cr then return end
+                        local ok = moveSegment(cr.Position, crossTarget, crossSpeed, isWallDanger)
+                        if ok then
+                            if stageTarget == 8 then
+                                return -- Stage 8: already at win block, stop navigateNavPoints here
+                            end
+                            break -- Stage 9+: success, exit retry loop
+                        end
+                        -- Danger: retreat to Stage-7 side and retry
+                        local r2 = getRoot()
+                        if r2 then moveSegment(r2.Position, CURRENT_NAV[18], crossSpeed) end
+                    end
+                end
+            elseif special.type == "wait_lava" then
+                -- Only wait for lava if target stage is 9+ (Stage 8 win block is before the lava)
+                if (Cfg.AutoWinTargetStage or 2) < 9 then
+                    -- Skip lava wait for Stage 8 and below
+                else
+                -- Stage 9 path: robust lava wait with consecutive safe checks
+                -- Live data: LavaPart.Y cycles from -71.5 (safe/bottom) up to 171.5 (top)
+                -- Floor is at Y=54.50. Lava is safe only when well below the floor.
+                local function getLava()
+                    local lt = workspace:FindFirstChild("NPC & Piege")
+                    local tower = lt and lt:FindFirstChild("LavaTower")
+                    return tower and tower:FindFirstChild("LavaPart")
+                end
+                local function checkLavaSafe()
+                    local lp = getLava()
+                    if not lp or not lp:IsA("BasePart") or not lp.Parent then return true end
+                    -- Safe only when lava center is well below the map floor (Y < -55)
+                    -- At Y=-55, top of lava is at Y=66 which is safely below floor (54.50)
+                    -- At Y=-71 (fully down), completely safe
+                    if lp.Position.Y < -55 then return true end
+                    return false
+                end
+                local consecutiveSafe = 0
+                while Cfg.AutoWin do
+                    local safe = checkLavaSafe()
+                    if safe then
+                        consecutiveSafe = consecutiveSafe + 1
+                    else
+                        consecutiveSafe = 0
+                    end
+                    -- Need 15 consecutive safe frames (~1.5s) to be absolutely sure
+                    if consecutiveSafe >= 15 then break end
+                    task.wait(0.1)
+                end
+                end -- close else (stage 9+ only)
+            end
+        end
+    end
+end
+
+-- Find the closest NAV_POINT index to a given position
+-- World-aware: only searches in the selected world's waypoints
+local function findClosestNavIdx(pos, worldOverride)
+    local world = worldOverride or Cfg.World
+    local CURRENT_NAV = world == "World 2" and NAV_POINTS_W2 or NAV_POINTS_W1
+    local bestIdx, bestDist = 1, math.huge
+    for i, pt in ipairs(CURRENT_NAV) do
+        local d = (pt - pos).Magnitude
+        if d < bestDist then bestDist = d; bestIdx = i end
+    end
+    return bestIdx
+end
+
+local function waitForRespawn()
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    
+    -- Wait for death/reset with a 1.5s timeout
+    local startWait = os.clock()
+    while hum and hum.Health > 0 and (os.clock() - startWait) < 1.5 do
+        task.wait(0.05)
+    end
+    
+    -- Wait for new character to spawn and load
+    task.wait(0.1)
+    char = LocalPlayer.Character
+    local root = char and char:WaitForChild("HumanoidRootPart", 5)
+    hum = char and char:FindFirstChildOfClass("Humanoid")
+    while (not char or not root or not hum or hum.Health <= 0) and Cfg.AutoWin do
+        task.wait(0.1)
+        char = LocalPlayer.Character
+        root = char and char:WaitForChild("HumanoidRootPart", 5)
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+    end
+end
+
+local function doWinCycle(onDone)
+    -- Wait for character to be fully loaded and alive
+    local char = LocalPlayer.Character
+    local root = char and char:WaitForChild("HumanoidRootPart", 5)
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    while (not char or not root or not hum or hum.Health <= 0) and Cfg.AutoWin do
+        task.wait(0.1)
+        char = LocalPlayer.Character
+        root = char and char:WaitForChild("HumanoidRootPart", 5)
+        hum = char and char:FindFirstChildOfClass("Humanoid")
+    end
+    if not Cfg.AutoWin or not root then if onDone then onDone() end return end
+
+    local startWins = getTrophies()
+
+    local stageNum = Cfg.AutoWinTargetStage or 2
+    local STAGE_CFG = Cfg.World == "World 2" and STAGE_WIN_CFG_W2 or STAGE_WIN_CFG_W1
+    local winCfg   = STAGE_CFG[stageNum]
+    if not winCfg then stageNum = 2; winCfg = STAGE_CFG[2] end
+
+    local stageData = getStageByNum(stageNum)
+    local winPos    = winCfg.pos
+    local navEndIdx = winCfg.navEnd
+
+    -- 1. Delete all obstacles if in World 2
+    if Cfg.World == "World 2" then
+        disableWorld2Traps()
+    end
+
+    -- 2. Stream target area
+    pcall(function() LocalPlayer:RequestStreamAroundAsync(winPos) end)
+
+    -- 2. Noclip + continuous heal
+    local wasFlying = Cfg.Fly
+    if Cfg.Fly then StopFly() end
+    enableNoclip()
+    local healConn = RunService.Heartbeat:Connect(function()
+        local h = getHum()
+        if h then pcall(function() h.Health = h.MaxHealth end) end
+    end)
+    table.insert(_conns, healConn)
+
+    local speed = math.max(100, Cfg.WinTweenSpeed or 2000)
+
+
+    -- 3. Compute navigation range:
+    --    targetNavIdx = nav point closest to the WinBlock (never overshoot)
+    --    startIdx     = nav point closest to the player's current position
+    --    Both computed dynamically so the path is always optimal.
+    local CURRENT_NAV = Cfg.World == "World 2" and NAV_POINTS_W2 or NAV_POINTS_W1
+    local targetNavIdx = findClosestNavIdx(winPos, Cfg.World)
+    -- Clamp to configured navEnd as safety upper bound (never go further than navEnd)
+    if navEndIdx and targetNavIdx > navEndIdx then
+        targetNavIdx = navEndIdx
+    end
+
+    -- Find closest nav point to player (works for both W1 and W2)
+    local r = getRoot()
+    local startIdx = 1
+    if r then
+        startIdx = findClosestNavIdx(r.Position, Cfg.World)
+    end
+
+    -- World 2: NO danger checks, simple straight navigation
+    -- World 1: lava danger detector (active for Stage 9+ where LavaTower exists)
+    local dangerCheck = nil
+    if Cfg.World ~= "World 2" then
+        local function isLavaDanger()
+            if stageNum < 9 then return false end
+            local lt = workspace:FindFirstChild("NPC & Piege")
+            local tower = lt and lt:FindFirstChild("LavaTower")
+            local lp = tower and tower:FindFirstChild("LavaPart")
+            if not lp or not lp:IsA("BasePart") then return false end
+            if lp.Position.Y < -40 then return false end
+            local root = getRoot()
+            if not root then return false end
+            if (lp.Position - root.Position).Magnitude < 400 then return true end
+            return false
+        end
+        dangerCheck = isLavaDanger
+    end
+
+    -- Navigate from player to the nav point closest to win block
+    -- If startIdx > targetNavIdx, skip navigation (player is already past/at the win)
+    if Cfg.AutoWin and targetNavIdx >= startIdx then
+        navigateNavPoints(startIdx, targetNavIdx, speed, dangerCheck, winPos)
+    end
+
+    -- 4b. For stage 9+: move slightly deeper into the stage so the game
+    -- clearly registers the player as being in the target stage (avoids
+    -- getting credited for the previous stage's win). Stage 8 already
+    -- has its win block right at the nav point, no need to push forward.
+    -- World 2 doesn't need this adjustment
+    -- REMOVED: This was causing player to go past win block then come back
+
+    -- 5. Locate the WinBlock (scan + proximity fallback)
+    local winBlock = nil
+    if Cfg.AutoWin then
+        local startScan = os.clock()
+        while not winBlock and (os.clock() - startScan) < 2.5 and Cfg.AutoWin do
+            winBlock = findWinBlockForStage(stageNum)
+            if not winBlock then task.wait(0.05) end
+        end
+    end
+
+    -- 6. Move to WinBlock and fire touch
+    r = getRoot()
+    if r and Cfg.AutoWin then
+        local destination = (winBlock and winBlock.Position) or winPos
+        local landPos = destination + Vector3.new(0, 0.5, 0)
+
+        -- Final tween to landing pos above win block (with lava danger check for Stage 9+)
+        -- World 2 doesn't have lava tower checks
+        local wpsF = buildGroundWaypoints(r.Position, landPos)
+        local j = 2
+        while j <= #wpsF and Cfg.AutoWin do
+            local cr = getRoot()
+            if not cr then break end
+            local ok = moveSegment(cr.Position, wpsF[j], speed, isLavaDanger)
+            if not ok and Cfg.World ~= "World 2" then
+                -- Lava danger: wait for it to subside then rebuild path (World 1 only)
+                local waitStart = os.clock()
+                while (os.clock() - waitStart) < 20 and Cfg.AutoWin do
+                    local lp = workspace:FindFirstChild("NPC & Piege")
+                        and workspace["NPC & Piege"]:FindFirstChild("LavaTower")
+                        and workspace["NPC & Piege"].LavaTower:FindFirstChild("LavaPart")
+                    if not lp or not lp:IsA("BasePart") or lp.Position.Y < -55 then break end
+                    task.wait(0.1)
+                end
+                r = getRoot()
+                if r then
+                    wpsF = buildGroundWaypoints(r.Position, landPos)
+                    j = 1
+                else
+                    break
+                end
+            end
+            j = j + 1
+        end
+
+        -- Disable noclip before touching to ensure proper collision
+        disableNoclip()
+
+        -- Simulate landing state
+        local hum = getHum()
+        simulateLanding(r, hum)
+
+        -- Snap exactly onto win block surface
+        r = getRoot()
+        if r then
+            r.CFrame = CFrame.new(destination)
+            task.wait(0.15)
+        end
+
+        -- Fire touch events (multiple times for reliability)
+        local touchTarget = winBlock or findWinBlockNear(destination, 50)
+        r = getRoot()
+        if touchTarget and r then
+            for i = 1, 3 do
+                pcall(function() firetouchinterest(touchTarget, r, 0) end)
+                task.wait(0.1)
+                pcall(function() firetouchinterest(touchTarget, r, 1) end)
+                task.wait(0.1)
+            end
+        end
+    end
+
+    -- 7. Short cooldown then cleanup
+    task.wait(0.25)
+    healConn:Disconnect()
+    disableNoclip()
+    if wasFlying then
+        Cfg.Fly = true
+        StartFly()
+    end
+
+    -- Wait for wins to increase (timeout 2.5s for lag)
+    local startWait = os.clock()
+    local winSuccess = false
+    while (os.clock() - startWait) < 2.5 and Cfg.AutoWin do
+        if getTrophies() > startWins then
+            winSuccess = true
+            break
+        end
+        task.wait(0.1)
+    end
+
+    if winSuccess then
+        Cfg.sessionWins        = Cfg.sessionWins + 1
+        Cfg.sessionWinTarget   = Cfg.sessionWinTarget + 1
+
+        -- Wait for death and respawn BEFORE returning to spawn/hub
+        waitForRespawn()
+
+        -- 8. Return to hub (World 1)
+        r = getRoot()
+        if r then
+            if Cfg.World ~= "World 2" then
+                -- Return to World 1 hub
+                r.CFrame = CFrame.new(1.87, 12, 7.76)
+            end
+        end
+    else
+        -- We failed to get the win (bug/lag). Restart the cycle!
+        Library:Notify({Title="Auto Win", Description="Win undetected! Retrying...", Time=3})
+    end
+
+    if onDone then onDone() end
+end
+
+-- Continuous Stream Request Loop (keeps target area warm)
+task.spawn(function()
+    while not _DEAD do
+        task.wait(1.5)
+        if Cfg.AutoWin then
+            pcall(function()
+                local CURRENT_CFG = Cfg.World == "World 2" and STAGE_WIN_CFG_W2 or STAGE_WIN_CFG_W1
+                local cfg = CURRENT_CFG[Cfg.AutoWinTargetStage or 2]
+                if cfg then
+                    LocalPlayer:RequestStreamAroundAsync(cfg.pos)
+                end
+            end)
+        end
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+--  WINDOW
+-- ══════════════════════════════════════════════════════════════════
+local Window = Library:CreateWindow({
+    Title            = "Keyboard Escape Hub",
+    Footer           = "Y2k Script Back2Back",
+    NotifySide       = "Right",
+    ShowCustomCursor = true,
+    Center           = true,
+    AutoShow         = true,
+    Resizable        = true,
+    CornerRadius     = 10,
+})
+
+local Tabs = {
+    Farm     = Window:AddTab("Farm",     "activity"),
+    Move     = Window:AddTab("Movement", "navigation"),
+    Teleport = Window:AddTab("Teleport", "map"),
+    Stats    = Window:AddTab("Stats",    "database"),
+    Misc     = Window:AddTab("Misc",     "package"),
+    Configs  = Window:AddTab("Configs",  "save"),
+    Settings = Window:AddTab("Settings", "settings"),
+    Credits  = Window:AddTab("Credits",  "info"),
+}
+
+-- ══════════════════════════════════════════════════════════════════
+--  HUD  (shared Y2k StatsPanel + Watermark + Keybinds modules)
+-- ══════════════════════════════════════════════════════════════════
+local panel = StatsPanel.new(Library, { title = "KEYBOARD ESCAPE" })
+panel:Line("wins",    { size = 14, color = Color3.fromRGB(255,210,130), bold = true })
+panel:Line("rebirth", { size = 12 })
+panel:Line("level",   { size = 12 })
+panel:Line("session", { size = 12, color = Color3.fromRGB(150,210,255) })
+panel:Line("fps",     { size = 12 })
+
+local wm = Watermark.new(Library, { title = "Y2k" })
+wm:Auto("Y2k", "Keyboard Escape")
+
+local kb = Keybinds.new(Library, { title = "Keybinds" })
+kb:Bind("autowin", "Auto Win",     Enum.KeyCode.G, function(a)
+    Cfg.AutoWin = a; Cfg.sessionWinTarget = 0; pcall(function() Toggles.AutoWin:SetValue(a) end)
+end)
+kb:Bind("rebirth", "Auto Rebirth", Enum.KeyCode.H, function(a)
+    Cfg.AutoRebirth = a; pcall(function() Toggles.AutoRebirth:SetValue(a) end)
+end)
+kb:Bind("fly",     "Fly",          Enum.KeyCode.J, function(a)
+    Cfg.Fly = a; if a then StartFly() else StopFly() end; pcall(function() Toggles.FlyToggle:SetValue(a) end)
+end)
+
+-- HUD update loop
+task.spawn(function()
+    while task.wait(1) do
+        pcall(function()
+            local s = getState()
+            panel:Set("wins",    "Wins: " .. fmt(tonumber(s.Wins or s.Trophies or s.Trophy or s.Currency) or 0))
+            panel:Set("rebirth", "Rebirths: " .. (tonumber(s.Rebirths) or 0))
+            panel:Set("level",   "Level: " .. (tonumber(s.Level) or "?"))
+            panel:Set("session", "Session wins: " .. fmt(Cfg.sessionWins))
+            panel:Set("fps",     ("FPS: %d  |  Players: %d"):format(math.floor(Y2k.fps()), #Players:GetPlayers()))
+            kb:Set("autowin", Cfg.AutoWin); kb:Set("rebirth", Cfg.AutoRebirth); kb:Set("fly", Cfg.Fly)
+        end)
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+--  TAB : FARM
+-- ══════════════════════════════════════════════════════════════════
+local FarmLeft  = Tabs.Farm:AddLeftGroupbox("Auto Win", "swords")
+local FarmRight = Tabs.Farm:AddRightGroupbox("Rebirth", "shield")
+
+-- AUTO WIN
+FarmLeft:AddLabel({Text="Auto Win Contribute to Gain Win Easily", DoesWrap=true})
+FarmLeft:AddDivider()
+
+-- World Selection Dropdown
+FarmLeft:AddDropdown("WorldSelectDD",{
+    Text="Select World",
+    Values={"World 1", "World 2"},
+    Default="World 1",
+    Tooltip="Choose which world to farm.",
+    Callback=function(v)
+        Cfg.World = v
+        if v == "World 2" then
+            NAV_POINTS = NAV_POINTS_W2
+            STAGE_WIN_CFG = STAGE_WIN_CFG_W2
+        else
+            NAV_POINTS = NAV_POINTS_W1
+            STAGE_WIN_CFG = STAGE_WIN_CFG_W1
+        end
+        -- Update stage dropdown
+        local newStageNames = {}
+        if v == "World 2" then
+            for n = 2, 14 do
+                table.insert(newStageNames, "Stage "..n)
+            end
+        else
+            for _,s in ipairs(STAGES) do
+                table.insert(newStageNames, "Stage "..s.n)
+            end
+        end
+        if Options.AutoWinStageDD then
+            Options.AutoWinStageDD:SetValues(newStageNames)
+            Options.AutoWinStageDD:SetValue(newStageNames[1])
+            Cfg.AutoWinTargetStage = tonumber(newStageNames[1]:match("Stage (%d+)"))
+        end
+        Library:Notify({Title="World Selected",Description=v,Time=2})
+    end,
+})
+
+-- Target Stage Dropdown
+local stageNames = {}
+for _,s in ipairs(STAGES) do
+    table.insert(stageNames, "Stage "..s.n)
+end
+FarmLeft:AddDropdown("AutoWinStageDD",{
+    Text="Target Stage",
+    Values=stageNames,
+    Default=stageNames[1],
+    Tooltip="Choose the target win plate to navigate to.",
+    Callback=function(v)
+        -- extract stage number from string "Stage N (...)"
+local n = tonumber(v:match("Stage (%d+)"))
+        if n then
+            Cfg.AutoWinTargetStage = n
+            Library:Notify({Title="Target Stage",Description="Stage "..n.." selected.",Time=2})
+        end
+    end,
+})
+
+-- Win Count Dropdown
+local winCountOptions = {"Infinite","5","10","25","50","100","200","500","1000"}
+FarmLeft:AddDropdown("AutoWinCountDD",{
+    Text="Wins to farm",
+    Values=winCountOptions,
+    Default="Infinite",
+    Tooltip="Automatically stop after this number of wins. 'Infinite' = no limit.",
+    Callback=function(v)
+        if v == "Infinite" then
+            Cfg.AutoWinTargetCount = 0
+        else
+            Cfg.AutoWinTargetCount = tonumber(v) or 0
+        end
+    end,
+})
+
+FarmLeft:AddSlider("WinDelay",{
+    Text="Cycle Delay", Default=0.3, Min=0.1, Max=5.0, Rounding=1, Suffix=" s",
+    Tooltip="Wait time between each cycle.",
+    Callback=function(v) Cfg.WinDelay=v end,
+})
+FarmLeft:AddSlider("WinTweenSpeed",{
+    Text="Tween Speed", Default=2000, Min=100, Max=8000, Rounding=0, Suffix=" st/s",
+    Tooltip="Tween speed across waypoints. Higher = faster.",
+    Callback=function(v) Cfg.WinTweenSpeed=v end,
+})
+FarmLeft:AddDivider()
+
+local lblBestStage = FarmLeft:AddLabel("Plate: Stage 2 | Session: 0 wins")
+FarmLeft:AddDivider()
+
+FarmLeft:AddToggle("AutoWin",{
+    Text="Auto Win", Default=false, Risky=true,
+    Tooltip="AutoWin.",
+    Callback=function(v)
+        Cfg.AutoWin = v
+        Cfg.sessionWinTarget = 0
+        Library:Notify(v and ("Auto Win started  Stage "..Cfg.AutoWinTargetStage) or "Auto Win stopped.")
+    notify("Auto Win", v and "ON" or "OFF") end,
+})
+
+-- AUTO REBIRTH
+FarmRight:AddLabel({Text="Fires Rebirth every 5 seconds. Server validates — safe to leave on.", DoesWrap=true})
+FarmRight:AddDivider()
+
+FarmRight:AddToggle("AutoRebirth",{
+    Text="Auto Rebirth", Default=false,
+    Callback=function(v) Cfg.AutoRebirth=v; Library:Notify(v and "Auto Rebirth on." or "Auto Rebirth off.") notify("Auto Rebirth", v and "ON" or "OFF") end,
+})
+
+FarmRight:AddButton({
+    Text="Rebirth Now", Tooltip="Fire rebirth immediately",
+    Func=function()
+        fireRemote("Rebirth")
+        Library:Notify({Title="Rebirth",Description="Fired!",Time=2})
+    end,
+})
+
+-- SPEED FARM
+local FarmRight2 = Tabs.Farm:AddRightGroupbox("Speed Farm", "activity")
+FarmRight2:AddLabel({Text="Walks in a circle to farm +1 Speed naturally. Does NOT change WalkSpeed.", DoesWrap=true})
+FarmRight2:AddDivider()
+
+FarmRight2:AddToggle("AutoWalkCircle",{
+    Text="Auto Walk Circle", Default=false,
+    Tooltip="Moves your character in a circle to farm speed. Uses natural walking.",
+    Callback=function(v)
+        Cfg.AutoWalkCircle = v
+        if v then
+            startWalkCircle()
+            Library:Notify("Auto Walk Circle ON — farming speed...")
+        else
+            stopWalkCircle()
+            Library:Notify("Auto Walk Circle OFF")
+        end
+    notify("Auto Walk Circle", v and "ON" or "OFF") end,
+})
+
+FarmRight2:AddSlider("WalkCircleRadius",{
+    Text="Circle Radius", Default=15, Min=5, Max=50, Rounding=0, Suffix=" studs",
+    Tooltip="How large the circle is. Smaller = tighter circle.",
+    Callback=function(v) Cfg.WalkCircleRadius=v end,
+})
+
+FarmRight2:AddSlider("WalkCircleSpeed",{
+    Text="Rotation Speed", Default=3, Min=1, Max=10, Rounding=1, Suffix=" rad/s",
+    Tooltip="How fast the direction rotates. Higher = tighter turns.",
+    Callback=function(v) Cfg.WalkCircleSpeed=v end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  TAB : MOVEMENT
+-- ══════════════════════════════════════════════════════════════════
+local MoveLeft  = Tabs.Move:AddLeftGroupbox("Flight & Speed", "navigation")
+local MoveRight = Tabs.Move:AddRightGroupbox("Physics & Extra", "zap")
+
+-- FLY
+MoveLeft:AddToggle("FlyToggle",{
+    Text="Fly  (WASD · Space · Ctrl)", Default=false,
+    Callback=function(v) Cfg.Fly=v; if v then StartFly() else StopFly() end notify("Fly  (WASD · Space · Ctrl)", v and "ON" or "OFF") end,
+})
+FlyToggleRef = Toggles.FlyToggle
+
+MoveLeft:AddSlider("FlySpeed",{
+    Text="Fly Speed", Default=300, Min=10, Max=3000, Rounding=0, Suffix=" st/s",
+    Callback=function(v) Cfg.FlySpeed=v end,
+})
+MoveLeft:AddLabel({Text="W/S = forward/back · A/D = strafe · Space = up · Ctrl = down",DoesWrap=true})
+MoveLeft:AddDivider()
+
+-- SPEED HACK
+MoveLeft:AddToggle("SpeedHack",{
+    Text="Speed Hack", Default=false,
+    Tooltip="Overrides WalkSpeed every frame. Game resets it but we override back.",
+    Callback=function(v) Cfg.SpeedHack=v notify("Speed Hack", v and "ON" or "OFF") end,
+})
+MoveLeft:AddSlider("WalkSpeedVal",{
+    Text="Walk Speed", Default=50, Min=16, Max=500, Rounding=0,
+    Callback=function(v) Cfg.WalkSpeed=v end,
+})
+MoveLeft:AddDivider()
+
+-- INFINITE JUMP
+MoveRight:AddToggle("InfiniteJump",{
+    Text="Infinite Jump", Default=false,
+    Callback=function(v) Cfg.InfiniteJump=v notify("Infinite Jump", v and "ON" or "OFF") end,
+})
+
+-- NOCLIP TOGGLE
+MoveRight:AddToggle("NoclipToggle",{
+    Text="Noclip", Default=false,
+    Tooltip="Disables collision on all character parts every frame.",
+    Callback=function(v)
+        Cfg.Noclip=v
+        if v then
+            enableNoclip()
+        else
+            disableNoclip()
+            -- Restore collisions
+            local c=getChar()
+            if c then
+                for _,p in ipairs(c:GetDescendants()) do
+                    if p:IsA("BasePart") then pcall(function() p.CanCollide=true end) end
+                end
+            end
+        end
+    notify("Noclip", v and "ON" or "OFF") end,
+})
+
+-- JUMP POWER
+MoveRight:AddSlider("JumpPowerVal",{
+    Text="Jump Power", Default=50, Min=1, Max=500, Rounding=0,
+    Callback=function(v)
+        local h=getHum()
+        if h then pcall(function() h.UseJumpPower=true; h.JumpPower=v end) end
+    end,
+})
+MoveRight:AddDivider()
+
+-- LOW GRAVITY
+MoveRight:AddToggle("LowGravity",{
+    Text="Low Gravity", Default=false,
+    Callback=function(v)
+        Cfg.LowGravity=v
+        workspace.Gravity = v and 25 or 196.2
+        Library:Notify(v and "Gravity: 25" or "Gravity restored.")
+    notify("Low Gravity", v and "ON" or "OFF") end,
+})
+
+MoveRight:AddButton({
+    Text="Re-apply Jump Power",
+    Func=function()
+        local h=getHum()
+        local v = Options.JumpPowerVal and Options.JumpPowerVal.Value or 50
+        if h then pcall(function() h.UseJumpPower=true; h.JumpPower=v end) end
+        Library:Notify("Jump Power set to "..v)
+    end,
+})
+MoveRight:AddDivider()
+
+-- ══════════════════════════════════════════════════════════════════
+--  TAB : TELEPORT    goes to stage START, not WinBlock
+-- ══════════════════════════════════════════════════════════════════
+local TpLeft  = Tabs.Teleport:AddLeftGroupbox("Stage Teleport", "map")
+local TpRight = Tabs.Teleport:AddRightGroupbox("Player TP", "user")
+
+TpLeft:AddLabel({Text="Teleports to the START of each stage, not the WinBlock. Uses server remote + smooth tween to bypass Streaming Enabled.", DoesWrap=true})
+TpLeft:AddDivider()
+
+TpLeft:AddSlider("TpSpeed",{
+    Text="Tween Speed", Default=500, Min=50, Max=2000, Rounding=0, Suffix=" st/s",
+    Callback=function() end,
+})
+TpLeft:AddDivider()
+
+-- Hub
+TpLeft:AddButton({
+    Text="Hub Spawn",
+    Func=function()
+        Library:Notify({Title="TP",Description=" Hub",Time=2})
+        tweenTo(Vector3.new(1.87,12,7.76), Options.TpSpeed and Options.TpSpeed.Value or 500, function()
+            Library:Notify("Arrived at Hub.")
+        end)
+    end,
+})
+
+-- Stage buttons
+for _,s in ipairs(STAGES) do
+    local sn  = s.n
+    local idx = s.idx
+    local sp  = s.startPos
+    TpLeft:AddButton({
+        Text    = "Stage "..sn,
+        Tooltip = "Teleport to Stage "..sn,
+        Func=function()
+            local spd = Options.TpSpeed and Options.TpSpeed.Value or 500
+            Library:Notify({Title="Teleport",Description=" Stage "..sn,Time=2})
+            task.spawn(function()
+                if sn > 2 then
+                    -- Fire previous checkpoint to stream in the target area
+                    fireRemote("RequestCheckpointTp", idx - 1, "wins")
+                    task.wait(0.5)
+                end
+                -- Smooth tween to stage start for all stages
+                tweenTo(sp, spd, function()
+                    Library:Notify("Arrived at Stage "..sn)
+                end)
+            end)
+        end,
+    })
+end
+
+-- Player TP
+TpRight:AddLabel("Teleport to Player"); TpRight:AddDivider()
+
+TpRight:AddDropdown("TpTarget",{Text="Target",Values={"None"},Default="None",Callback=function() end})
+
+TpRight:AddButton({
+    Text="Refresh Players",
+    Func=function()
+        local names={}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p~=LocalPlayer then table.insert(names,p.Name) end
+        end
+        if #names==0 then Library:Notify("No other players.") return end
+        if Options.TpTarget then Options.TpTarget:SetValues(names) end
+        Library:Notify(#names.." player(s) found.")
+    end,
+})
+
+TpRight:AddButton({
+    Text="Teleport to Selected",
+    Func=function()
+        local sel=Options.TpTarget and Options.TpTarget.Value
+        if not sel or sel=="None" then Library:Notify("Select a player first.") return end
+        local t=Players:FindFirstChild(sel)
+        if t and t.Character then
+            local r=t.Character:FindFirstChild("HumanoidRootPart")
+            if r then
+                Library:Notify({Title="TP",Description=" "..sel,Time=2})
+                tweenTo(r.Position+Vector3.new(0,4,0),400,function() Library:Notify("Arrived at "..sel) end)
+                return
+            end
+        end
+        Library:Notify("Player not found.")
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  TAB : STATS
+-- ══════════════════════════════════════════════════════════════════
+local SL = Tabs.Stats:AddLeftGroupbox("Player Profile","database")
+local SR = Tabs.Stats:AddRightGroupbox("Session & Boosts","activity")
+
+local lblLvl  = SL:AddLabel("Level : ...")
+local lblXP   = SL:AddLabel("XP : ...")
+local lblXPN  = SL:AddLabel("XP Needed : ...")
+local lblTXP  = SL:AddLabel("Total XP : ...")
+SL:AddDivider()
+local lblWins = SL:AddLabel("Wins : ...")
+local lblReb  = SL:AddLabel("Rebirths : ...")
+local lblMult = SL:AddLabel("Multiplier : ...")
+local lblSB   = SL:AddLabel("Step Bonus : ...")
+SL:AddDivider()
+local lblST   = SL:AddLabel("Speed Tier : ...")
+local lblCS   = SL:AddLabel("Custom Speed : ...")
+
+local lblSTime= SR:AddLabel("Session : 0s")
+local lblSW   = SR:AddLabel("Wins (session) : 0")
+SR:AddDivider()
+local lblX2   = SR:AddLabel("X2 Boost : ...")
+local lblWB   = SR:AddLabel("Wins Boost : ...")
+local lblSB2  = SR:AddLabel("Speed Boost : ...")
+local lblFB   = SR:AddLabel("Friend Bonus : ...")
+local lblBXP  = SR:AddLabel("Bonus XP Mult : ...")
+local lblBW   = SR:AddLabel("Bonus Wins Mult : ...")
+SR:AddDivider()
+local lblNR   = SR:AddLabel("Next Rebirth : ...")
+local lblRP   = SR:AddLabel("Rebirth Progress : ...")
+
+-- ══════════════════════════════════════════════════════════════════
+--  TAB : MISC
+-- ══════════════════════════════════════════════════════════════════
+local MiscL = Tabs.Misc:AddLeftGroupbox("Gameplay","smile")
+local MiscR = Tabs.Misc:AddRightGroupbox("Utilities","wrench")
+
+-- GAMEPLAY (left)
+MiscL:AddToggle("VoidPlatformToggle",{
+    Text="Anti Void Platform", Default=false,
+    Tooltip="Large neon platform follows below you — prevents all void deaths.",
+    Callback=function(v)
+        Cfg.VoidPlatform=v
+        if v then createVoidPlatform() else removeVoidPlatform() end
+        Library:Notify(v and "Anti Void Platform active." or "Anti Void Platform removed.")
+    notify("Anti Void Platform", v and "ON" or "OFF") end,
+})
+
+MiscL:AddSlider("VoidPlatformOffset",{
+    Text="Platform Offset", Default=4.5, Min=3.0, Max=10.0, Rounding=1, Suffix=" studs",
+    Tooltip="Adjust the distance of the anti void platform below your character root.",
+    Callback=function(v)
+        Cfg.PlatformOffset = v
+        if Cfg.VoidPlatform then createVoidPlatform() end
+    end,
+})
+
+MiscL:AddDivider()
+
+MiscL:AddButton({
+    Text="Revive Free",
+    Tooltip="Request a free revive from the server",
+    Func=function()
+        fireRemote("RequestRevive")
+        Library:Notify({Title="Revive",Description="Request sent!",Time=3})
+    end,
+})
+
+MiscL:AddButton({
+    Text="Anti AFK",
+    Func=function()
+        local vu=game:GetService("VirtualUser")
+        table.insert(_conns, LocalPlayer.Idled:Connect(function()
+            vu:Button2Down(Vector2.new(0,0),Camera.CFrame)
+            task.wait(1)
+            vu:Button2Up(Vector2.new(0,0),Camera.CFrame)
+        end))
+        Library:Notify({Title="Anti-AFK",Description="Active.",Time=3})
+    end,
+})
+
+MiscL:AddDivider()
+
+-- MONSTER CONTROLS
+MiscL:AddToggle("MonsterESPToggle",{
+    Text="Monster ESP", Default=false,
+    Tooltip="Shows red name tag + health bar above every monster.",
+    Callback=function(v)
+        Cfg.MonsterESP=v
+        if v then refreshMonsterESP()
+        else clearESP() end
+        Library:Notify(v and "Monster ESP on." or "Monster ESP off.")
+    notify("Monster ESP", v and "ON" or "OFF") end,
+})
+
+MiscL:AddButton({
+    Text="Refresh Monster ESP",
+    Func=function()
+        if Cfg.MonsterESP then refreshMonsterESP(); Library:Notify("ESP refreshed.") end
+    end,
+})
+
+MiscL:AddDivider()
+
+MiscL:AddToggle("DeleteObstaclesToggle",{
+    Text="Delete Obstacles", Default=false,
+    Tooltip="Disables CanTouch/CanCollide on lava, kill, hazard, spike, acid, fire and similar parts. Makes them semi-transparent. Prevents death on Stages 9/10 and other kill zones.",
+    Callback=function(v)
+        Cfg.DeleteObstacles = v
+        if v then
+            local n = applyDeleteObstacles()
+            Library:Notify({Title="Delete Obstacles",Description="Disabled "..n.." hazard parts.",Time=3})
+        else
+            restoreObstacles()
+            Library:Notify("Obstacles restored.")
+        end
+    notify("Delete Obstacles", v and "ON" or "OFF") end,
+})
+
+MiscL:AddButton({
+    Text="Scan Obstacles Now",
+    Tooltip="Manually rescan and disable all hazard parts in the workspace.",
+    Func=function()
+        local n = applyDeleteObstacles()
+        Library:Notify({Title="Obstacles",Description="Scanned: "..n.." parts disabled.",Time=3})
+    end,
+})
+
+MiscL:AddToggle("TsunamiGuardToggle",{
+    Text="Tsunami Guard (anti-kill)", Default=false,
+    Tooltip="The tsunami kill is server-side, so deleting it won't help. This rides you above the wave's crest whenever it sweeps toward you, then drops you back.",
+    Callback=function(v)
+        Cfg.TsunamiGuard = v
+        Library:Notify({Title="Tsunami Guard",Description=v and "ON — you'll ride over the wave." or "OFF",Time=3})
+    notify("Tsunami Guard (anti-kill)", v and "ON" or "OFF") end,
+})
+
+MiscL:AddToggle("GoldTreadmillToggle",{
+    Text="Gold Treadmill (best-effort)", Default=false,
+    Tooltip="Keeps the client GoldTreadmillActive flag set for the gold step-rate. It's normally a gamepass, so payout may still be server-gated.",
+    Callback=function(v)
+        Cfg.GoldTreadmill = v
+        Library:Notify({Title="Gold Treadmill",Description=v and "ON (best-effort)" or "OFF",Time=3})
+    notify("Gold Treadmill (best-effort)", v and "ON" or "OFF") end,
+})
+
+-- UTILITIES (right)
+MiscR:AddToggle("NoTextureTog",{
+    Text="No Texture", Default=false,
+    Tooltip="Removes all textures — big FPS boost.",
+    Callback=function(v)
+        Cfg.NoTexture=v
+        if v then applyNoTexture() else restoreTextures() end
+        Library:Notify(v and "No Texture on." or "Textures restored.")
+    notify("No Texture", v and "ON" or "OFF") end,
+})
+
+MiscR:AddToggle("Fullbright",{
+    Text="Fullbright", Default=false,
+    Callback=function(v)
+        pcall(function()
+            Lighting.Brightness=v and 3 or 1
+            Lighting.GlobalShadows=not v
+            Lighting.FogEnd=v and 1e9 or 100000
+            local atmo=Lighting:FindFirstChildOfClass("Atmosphere")
+            if atmo then atmo.Density=v and 0 or 0.3 end
+        end)
+    notify("Fullbright", v and "ON" or "OFF") end,
+})
+
+MiscR:AddToggle("RemoveFog",{
+    Text="Remove Fog", Default=false,
+    Callback=function(v)
+        Lighting.FogEnd=v and 1e9 or 100000
+        Lighting.FogStart=v and 1e9 or 0
+    notify("Remove Fog", v and "ON" or "OFF") end,
+})
+
+MiscR:AddToggle("HideGUIs",{
+    Text="Hide Game GUIs", Default=false,
+    Callback=function(v)
+        for _,gui in ipairs(LocalPlayer.PlayerGui:GetChildren()) do
+            if gui.Name~="RobloxGameMenuV3" then pcall(function() gui.Enabled=not v end) end
+        end
+    notify("Hide Game GUIs", v and "ON" or "OFF") end,
+})
+
+MiscR:AddDivider()
+
+MiscR:AddButton({
+    Text="Remove Particles",
+    Tooltip="Destroys all particle emitters, beams and trails — boosts FPS.",
+    Func=function()
+        local n=0
+        for _,obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail")
+            or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+                pcall(function() obj:Destroy(); n+=1 end)
+            end
+        end
+        Library:Notify({Title="Particles",Description=n.." effects removed.",Time=3})
+    end,
+})
+
+MiscR:AddButton({
+    Text="Disable All Shadows",
+    Tooltip="Turns off shadow casting on every BasePart — good FPS gain.",
+    Func=function()
+        local n=0
+        for _,obj in ipairs(workspace:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                pcall(function() obj.CastShadow=false; n+=1 end)
+            end
+        end
+        Library:Notify({Title="Shadows",Description="Disabled on "..n.." parts.",Time=3})
+    end,
+})
+
+MiscR:AddButton({
+    Text="Max Graphics", Func=function()
+        settings().Rendering.QualityLevel=Enum.QualityLevel.Level21
+        Library:Notify("Graphics: MAX")
+    end,
+})
+
+MiscR:AddButton({
+    Text="Min Graphics",
+    Tooltip="Sets quality to Level01 for maximum FPS.",
+    Func=function()
+        settings().Rendering.QualityLevel=Enum.QualityLevel.Level01
+        Library:Notify("Graphics: MIN — Max FPS!")
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  MISC : INVENTORY (left)
+-- ══════════════════════════════════════════════════════════════════
+local InvBox = Tabs.Misc:AddLeftGroupbox("Inventory","shopping-bag")
+
+local shopAurasCache, shopTrailsCache = {}, {}
+local selectedAuraToBuy, selectedTrailToBuy = nil, nil
+
+InvBox:AddButton({
+    Text="Equip Best Items",
+    Tooltip="Equips your best aura and trail from inventory.",
+    Func=function()
+        local inv = getInventoryAuras()
+        local bestAura, bestTrail = nil, nil
+        for _, item in ipairs(inv) do
+            if item.type:lower():find("aura") and (not bestAura or item.rarity > bestAura.rarity) then
+                bestAura = item
+            end
+            if item.type:lower():find("trail") and (not bestTrail or item.rarity > bestTrail.rarity) then
+                bestTrail = item
+            end
+        end
+        if bestAura then equipItem(bestAura.name, bestAura.type); Library:Notify("Equipped aura: "..bestAura.name) end
+        if bestTrail then equipItem(bestTrail.name, bestTrail.type); Library:Notify("Equipped trail: "..bestTrail.name) end
+        if not bestAura and not bestTrail then Library:Notify("No aura/trail found in inventory.") end
+    end,
+})
+
+InvBox:AddButton({
+    Text="Unequip All",
+    Tooltip="Removes all equipped auras and trails.",
+    Func=function()
+        unequipAll()
+        Library:Notify("Unequipped all auras & trails.")
+    end,
+})
+
+InvBox:AddDivider()
+
+local auraPicker = InvBox:AddDropdown("AuraPicker",{
+    Text="Buy Aura",
+    Values={},
+    AllowNull=true,
+    Callback=function(v)
+        if v then
+            for _, a in ipairs(shopAurasCache) do
+                if v:find(a.name) then selectedAuraToBuy=a; break end
+            end
+        end
+    end,
+})
+
+local trailPicker = InvBox:AddDropdown("TrailPicker",{
+    Text="Buy Trail",
+    Values={},
+    AllowNull=true,
+    Callback=function(v)
+        if v then
+            for _, t in ipairs(shopTrailsCache) do
+                if v:find(t.name) then selectedTrailToBuy=t; break end
+            end
+        end
+    end,
+})
+
+InvBox:AddButton({
+    Text="Buy Selected Aura",
+    Func=function()
+        if selectedAuraToBuy then
+            buyItem(selectedAuraToBuy.name, selectedAuraToBuy.type)
+            Library:Notify("Bought: "..selectedAuraToBuy.name)
+        else
+            Library:Notify("Select an aura from the dropdown first.")
+        end
+    end,
+})
+
+InvBox:AddButton({
+    Text="Buy Selected Trail",
+    Func=function()
+        if selectedTrailToBuy then
+            buyItem(selectedTrailToBuy.name, selectedTrailToBuy.type)
+            Library:Notify("Bought: "..selectedTrailToBuy.name)
+        else
+            Library:Notify("Select a trail from the dropdown first.")
+        end
+    end,
+})
+
+InvBox:AddDivider()
+
+InvBox:AddButton({
+    Text="Get Infinity Trail (FREE)",
+    Tooltip="Exploit: Get the Infinity Trail Gamepass for free via trophies.",
+    Func=function()
+        local rem = ReplicatedStorage:WaitForChild("Remotes"):FindFirstChild("BuyTrail")
+        if rem and rem:IsA("RemoteFunction") then
+            local ok, success, err = pcall(function() return rem:InvokeServer("InfinityTrail", "Wins") end)
+            if ok and success then
+                Library:Notify({Title="Exploit Successful", Description="Infinity Trail obtained!", Time=5})
+                equipItem("InfinityTrail", "Trail")
+            else
+                Library:Notify("Exploit failed or already owned.")
+            end
+        end
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  MISC : AUTO BUY (right)
+-- ══════════════════════════════════════════════════════════════════
+local AutoBuyBox = Tabs.Misc:AddRightGroupbox("Auto Buy","zap")
+
+AutoBuyBox:AddButton({
+    Text="Buy Best Aura",
+    Tooltip="Purchases the most expensive aura you can afford with your current Wins.",
+    Func=function()
+        local t = getTrophies()
+        local auras, _ = getShopAurasTrails()
+        table.sort(auras, function(a,b) return a.price > b.price end)
+        for _, aura in ipairs(auras) do
+            if t >= aura.price then
+                buyItem(aura.name, aura.type)
+                Library:Notify({Title="Auto Buy",Description="Bought aura: "..aura.name.." ("..fmt(aura.price)..")",Time=3})
+                return
+            end
+        end
+        Library:Notify({Title="Auto Buy",Description="No aura affordable. Wins: "..fmt(t),Time=3})
+    end,
+})
+
+AutoBuyBox:AddButton({
+    Text="Buy Best Trail",
+    Tooltip="Purchases the best trail you can afford with your current Wins.",
+    Func=function()
+        local t = getTrophies()
+        local _, trails = getShopAurasTrails()
+        table.sort(trails, function(a,b) return a.rarity > b.rarity end)
+        for _, trail in ipairs(trails) do
+            if t >= trail.price then
+                buyItem(trail.name, trail.type)
+                Library:Notify({Title="Auto Buy",Description="Bought trail: "..trail.name,Time=3})
+                return
+            end
+        end
+        Library:Notify({Title="Auto Buy",Description="No trail affordable. Wins: "..fmt(t),Time=3})
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  MISC : SHOP (right below Auto Buy)
+-- ══════════════════════════════════════════════════════════════════
+local ShopBox = Tabs.Misc:AddRightGroupbox("Shop","store")
+
+local shopItemsCache = {}
+local selectedShopItem = nil
+
+ShopBox:AddButton({
+    Text="Refresh Shop",
+    Tooltip="Updates all dropdowns.",
+    Func=function()
+        shopAurasCache, shopTrailsCache = getShopAurasTrails()
+        local auraNames, trailNames = {}, {}
+        for _, a in ipairs(shopAurasCache) do table.insert(auraNames, a.name.." ["..fmt(a.price).."]") end
+        for _, t in ipairs(shopTrailsCache) do table.insert(trailNames, t.name) end
+        pcall(function() Options.AuraPicker:SetValues(auraNames) end)
+        pcall(function() Options.TrailPicker:SetValues(trailNames) end)
+        
+        shopItemsCache = getShopItems()
+        local names = {}
+        for _, item in ipairs(shopItemsCache) do
+            table.insert(names, item.name.." ["..fmt(item.price).." "..item.type.."]")
+        end
+        pcall(function() Options.ShopPicker:SetValues(names) end)
+        Library:Notify("Refreshed. Auras: "..#auraNames.." | Trails: "..#trailNames.." | Items: "..#names)
+    end,
+})
+
+local shopPicker = ShopBox:AddDropdown("ShopPicker",{
+    Text="Shop Item",
+    Values={},
+    AllowNull=true,
+    Callback=function(v)
+        if v then
+            for _, item in ipairs(shopItemsCache) do
+                if v:find(item.name) then selectedShopItem=item; break end
+            end
+        end
+    end,
+})
+
+ShopBox:AddButton({
+    Text="Buy Selected Item",
+    Func=function()
+        if selectedShopItem then
+            buyItem(selectedShopItem.name, selectedShopItem.type)
+            Library:Notify("Bought shop item: "..selectedShopItem.name)
+        else
+            Library:Notify("Select an item from the shop dropdown first.")
+        end
+    end,
+})
+
+ShopBox:AddDivider()
+
+ShopBox:AddButton({
+    Text="Buy Entire Shop",
+    Tooltip="Attempts to buy every item in the shop (one by one).",
+    Func=function()
+        shopItemsCache = getShopItems()
+        local bought, skipped = 0, 0
+        for _, item in ipairs(shopItemsCache) do
+            local t = getTrophies()
+            if t >= item.price then
+                buyItem(item.name, item.type)
+                bought = bought + 1
+                task.wait(0.2)
+            else
+                skipped = skipped + 1
+            end
+        end
+        Library:Notify({Title="Shop",Description="Bought "..bought.." | Skipped "..skipped.." (insufficient Wins)",Time=4})
+    end,
+})
+
+-- ══════════════════════════════════════════════════════════════════
+--  INIT DROPDOWNS AT STARTUP
+-- ══════════════════════════════════════════════════════════════════
+task.spawn(function()
+    task.wait(2)
+    shopAurasCache, shopTrailsCache = getShopAurasTrails()
+    local auraNames, trailNames = {}, {}
+    for _, a in ipairs(shopAurasCache) do table.insert(auraNames, a.name.." ["..fmt(a.price).."]") end
+    for _, t in ipairs(shopTrailsCache) do table.insert(trailNames, t.name) end
+    pcall(function() if Options.AuraPicker then Options.AuraPicker:SetValues(auraNames) end end)
+    pcall(function() if Options.TrailPicker then Options.TrailPicker:SetValues(trailNames) end end)
+    
+    shopItemsCache = getShopItems()
+    local names = {}
+    for _, item in ipairs(shopItemsCache) do
+        table.insert(names, item.name.." ["..fmt(item.price).." "..item.type.."]")
+    end
+    pcall(function() if Options.ShopPicker then Options.ShopPicker:SetValues(names) end end)
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+--  SETTINGS
+-- ══════════════════════════════════════════════════════════════════
+local SettB = Tabs.Settings:AddLeftGroupbox("Interface","monitor")
+
+SettB:AddToggle("CustomCursor",{Text="Custom Cursor",Default=true,Callback=function(v) Library.ShowCustomCursor=v notify("Custom Cursor", v and "ON" or "OFF") end})
+SettB:AddLabel("Cursor Color"):AddColorPicker("CursorColor",{
+    Default=Color3.fromRGB(0,210,229),Title="Cursor Color",
+    Callback=function(v) Library:SetCursorColor(v) end,
+})
+SettB:AddDropdown("NotifSide",{
+    Text="Notification Side",Values={"Left","Right"},Default="Right",
+    Callback=function(v) Library:SetNotifySide(v) end,
+})
+SettB:AddDivider()
+SettB:AddLabel("Menu Key"):AddKeyPicker("MenuKeybind",{Default="RightControl",NoUI=true,Text="Toggle Menu"})
+local function fullUnload()
+    _DEAD = true
+    for k, v in pairs(Cfg) do if type(v) == "boolean" then Cfg[k] = false end end
+    for _, c in ipairs(_conns) do pcall(function() c:Disconnect() end) end
+    pcall(function() if FlyConn then FlyConn:Disconnect() end end)
+    pcall(function() if noclipConn then noclipConn:Disconnect() end end)
+    pcall(function() if monsterAddedConn then monsterAddedConn:Disconnect() end end)
+    pcall(function() if stopWalkCircle then stopWalkCircle() end end)
+    pcall(function() panel:Destroy() end); pcall(function() wm:Destroy() end); pcall(function() kb:Destroy() end)
+    pcall(function() Y2k.release("Keyboard Escape") end)
+    Library:Unload()
+end
+SettB:AddButton({Text="Unload Script",Func=function() fullUnload(); notify("Unload Script", "done") end})
+pcall(function() Library:OnUnload(fullUnload) end)
+pcall(function() if Y2k.setUnload then Y2k.setUnload("Keyboard Escape", fullUnload) end end)
+
+Y2k.modulesGroup(Tabs.Settings, { panel = panel, wm = wm, kb = kb })
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+-- ══════════════════════════════════════════════════════════════════
+--  ADDONS
+-- ══════════════════════════════════════════════════════════════════
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({"MenuKeybind"})
+ThemeManager:SetFolder("KeyboardEscapeHub")
+SaveManager:SetFolder("KeyboardEscapeHub/configs")
+SaveManager:BuildConfigSection(Tabs.Configs)
+ThemeManager:ApplyToTab(Tabs.Settings)
+SaveManager:LoadAutoloadConfig()
+
+-- ══════════════════════════════════════════════════════════════════
+--  CREDITS
+-- ══════════════════════════════════════════════════════════════════
+local CL=Tabs.Credits:AddLeftGroupbox("About","info")
+CL:AddLabel("Script : Keyboard Escape Hub v1.0")
+CL:AddLabel("UI     : by Y2k Script Back2Back")
+CL:AddDivider()
+CL:AddLabel("Game   : +1 Speed Keyboard Escape")
+CL:AddLabel("Studio : SecretVerse Studio")
+CL:AddLabel("PlaceId: 95082159892680")
+
+local CR=Tabs.Credits:AddRightGroupbox("Changelog","save")
+CR:AddLabel("Beta Auto win")
+CR:AddLabel({Text="Auto Rebirth",DoesWrap=true})
+CR:AddLabel({Text="Esp Monster",DoesWrap=true})
+CR:AddLabel({Text="Delete Obstacles, Scan Now button",DoesWrap=true})
+CR:AddLabel({Text="Added Movements",DoesWrap=true})
+CR:AddLabel({Text="Added Keysystem",DoesWrap=true})
+
+
+-- ══════════════════════════════════════════════════════════════════
+--  AUTOMATION LOOPS
+-- ══════════════════════════════════════════════════════════════════
+
+-- AUTO WIN LOOP
+local autoWinActive = false
+task.spawn(function()
+    while not _DEAD do
+        task.wait(0.05)
+        if Cfg.AutoWin and not autoWinActive then
+            autoWinActive = true
+            task.spawn(function()
+                Cfg.sessionWinTarget = 0
+                while Cfg.AutoWin do
+                    -- Check win count limit
+                    if Cfg.AutoWinTargetCount > 0 and Cfg.sessionWinTarget >= Cfg.AutoWinTargetCount then
+                        Cfg.AutoWin = false
+                        pcall(function() Toggles.AutoWin:SetValue(false) end)
+                        Library:Notify({Title="Auto Win",Description="Objectif atteint : "..Cfg.sessionWinTarget.." wins!",Time=5})
+                        break
+                    end
+
+                    local done    = false
+                    local timeout = 0
+
+                    doWinCycle(function() done = true end)
+
+                    -- Wait for cycle to finish (timeout 90s max for long stages)
+                    while not done and Cfg.AutoWin do
+                        task.wait(0.05)
+                        timeout = timeout + 0.05
+                        if timeout > 90 then done = true end
+                        -- If player dies, abort cycle so it restarts automatically
+                        local c = getChar()
+                        local h = getHum()
+                        if not c or not h or h.Health <= 0 then
+                            done = true
+                        end
+                    end
+
+                    if Cfg.AutoWin then
+                        task.wait(Cfg.WinDelay)
+                    end
+                end
+                autoWinActive = false
+            end)
+        end
+    end
+end)
+
+-- AUTO REBIRTH
+task.spawn(function()
+    while task.wait(5) do
+        if Cfg.AutoRebirth then
+            fireRemote("Rebirth")
+        end
+    end
+end)
+
+-- SPEED HACK
+table.insert(_conns, RunService.Stepped:Connect(function()
+    local hum=getHum()
+    if hum then
+        if Cfg.SpeedHack then
+            pcall(function() hum.WalkSpeed=Cfg.WalkSpeed end)
+        end
+    end
+    -- Permanent noclip (when toggle is on separately from travel noclip)
+    if Cfg.Noclip then
+        local c=getChar(); if c then
+            for _,p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide=false end
+            end
+        end
+    end
+end))
+
+-- INFINITE JUMP
+table.insert(_conns, UserInputService.JumpRequest:Connect(function()
+    if Cfg.InfiniteJump then
+        local h=getHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end))
+
+-- RESPAWN RECONNECT
+table.insert(_conns, LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if Cfg.Fly then StartFly() end
+    if Cfg.VoidPlatform then createVoidPlatform() end
+    -- Re-apply jump power
+    task.wait(0.5)
+    local h=getHum()
+    if h and Options.JumpPowerVal then
+        pcall(function() h.UseJumpPower=true; h.JumpPower=Options.JumpPowerVal.Value end)
+    end
+end))
+
+-- AUTO WALK CIRCLE (Speed Farm)
+local walkCircleConn
+local walkAngle = 0
+
+function stopWalkCircle()
+    if walkCircleConn then
+        walkCircleConn:Disconnect()
+        walkCircleConn = nil
+    end
+    local hum = getHum()
+    if hum then
+        pcall(function() hum:Move(Vector3.zero, false) end)
+    end
+end
+
+function startWalkCircle()
+    stopWalkCircle()
+    walkAngle = 0
+    walkCircleConn = RunService.RenderStepped:Connect(function(dt)
+        if not Cfg.AutoWalkCircle then
+            stopWalkCircle()
+            return
+        end
+        local hum = getHum()
+        if not hum then return end
+        -- Rotate direction over time
+        walkAngle = walkAngle + (Cfg.WalkCircleSpeed * dt)
+        local dir = Vector3.new(math.cos(walkAngle), 0, math.sin(walkAngle)).Unit
+        hum:Move(dir, false) -- world space, natural walking
+    end)
+end
+
+-- STATS REFRESH
+task.spawn(function()
+    while not _DEAD do
+        task.wait(2)
+        if _DEAD then break end
+        pcall(function()
+            local s=getState()
+            pcall(function()
+                local targetLabel = "Plate: Stage "..Cfg.AutoWinTargetStage
+                local countInfo = (Cfg.AutoWinTargetCount > 0)
+                    and (" | "..Cfg.sessionWinTarget.."/"..Cfg.AutoWinTargetCount.." wins")
+                    or  (" | Session: "..Cfg.sessionWins.." wins")
+                lblBestStage:SetText(targetLabel..countInfo)
+            end)
+            pcall(function() lblLvl:SetText("Level : "..(tonumber(s.Level) or "?")) end)
+            pcall(function() lblXP:SetText("XP : "..fmt(tonumber(s.XP) or 0).." / "..fmt(tonumber(s.XPRequired) or 0)) end)
+            pcall(function() lblXPN:SetText("XP Needed : "..fmt(math.max(0,(tonumber(s.XPRequired) or 0)-(tonumber(s.XP) or 0)))) end)
+            pcall(function() lblTXP:SetText("Total XP : "..fmt(tonumber(s.TotalXP) or 0)) end)
+            pcall(function() lblWins:SetText("Wins : "..fmt(tonumber(s.Wins or s.Trophies or s.Trophy or s.Currency) or 0)) end)
+            pcall(function() lblReb:SetText("Rebirths : "..(tonumber(s.Rebirths) or 0)) end)
+            pcall(function() lblMult:SetText("Multiplier : x"..(tonumber(s.Multiplier) or 1)) end)
+            pcall(function() lblSB:SetText("Step Bonus : +"..(tonumber(s.StepBonus) or 1)) end)
+            pcall(function() lblST:SetText("Speed Tier : "..(tonumber(s.CurrentSpeedTier) or 0)) end)
+            pcall(function() lblCS:SetText("Custom Speed : "..(tonumber(s.CustomWalkSpeed) or 0)) end)
+            local el=os.time()-Cfg.sessionStart
+            pcall(function() lblSTime:SetText(string.format("Session : %dm %ds",math.floor(el/60),el%60)) end)
+            pcall(function() lblSW:SetText("Wins (session) : "..fmt(Cfg.sessionWins)) end)
+            pcall(function() lblX2:SetText("X2 Boost : "..(toBool(s.X2Boost) and "" or "")) end)
+            pcall(function() lblWB:SetText("Wins Boost : "..(toBool(s.WinsBoostActive) and "" or "")) end)
+            pcall(function() lblSB2:SetText("Speed Boost : "..(toBool(s.SpeedBoostActive) and (" x"..(tonumber(s.SpeedBoostMultiplier) or 1)) or "")) end)
+            pcall(function() lblFB:SetText("Friend Bonus : +"..(tonumber(s.FriendBoostPercent) or 0).."%") end)
+            pcall(function() lblBXP:SetText("Bonus XP Mult : x"..(tonumber(s.BonusXPMultiplier) or 1)) end)
+            pcall(function() lblBW:SetText("Bonus Wins Mult : x"..(tonumber(s.BonusWinsMultiplier) or 1)) end)
+            -- Rebirth progress (simple level check)
+            local lvl=tonumber(s.Level) or 1
+            local nextReb=nil
+            for _,tier in ipairs({
+                {level=5,mult=1.25},{level=10,mult=1.5},{level=20,mult=2},
+                {level=50,mult=3},{level=100,mult=5},{level=200,mult=8},
+                {level=500,mult=12},{level=1000,mult=20}
+            }) do
+                if lvl < tier.level then nextReb=tier break end
+            end
+            if nextReb then
+                pcall(function() lblNR:SetText("Next Rebirth : Lv"..nextReb.level.." (x"..nextReb.mult..")") end)
+                pcall(function() lblRP:SetText("Progress : "..lvl.." / "..nextReb.level) end)
+            else
+                pcall(function() lblNR:SetText("Next Rebirth : MAX!") end)
+                pcall(function() lblRP:SetText("Level : "..lvl) end)
+            end
+        end)
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════
+Library:Notify({Title="Keyboard Escape Hub v6.0",Description="Loaded! | Y2k Script Back2Back",Time=5})
