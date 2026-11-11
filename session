@@ -1,0 +1,5797 @@
+local HttpService, Players1, LocalPlayer1, func, func1, func4, func5, module, Workspace, RunService, UserInputService, ReplicatedStorage, VirtualInputManager, flag, v14, flag1, flag2, num, flag3, flag4, flag5, flag6, num1, flag7, num2, num3, flag8, flag9, flag10, flag11, v15
+
+do
+	HttpService = game:GetService("HttpService")
+	Players1 = game:GetService("Players")
+	LocalPlayer1 = Players1.LocalPlayer
+	local v3 = "SymbioteSettings_" .. tostring(game.PlaceId) .. ".json"
+
+	local tbl = {
+		NoClip = false,
+		WalkSpeed = false,
+		WalkSpeedAmount = 1,
+		LaggyRun = false,
+		LaggyRunDistance = 1,
+		LaggyRunDelay = 1,
+		CtrlClickTP = false,
+		InfiniteJump = false,
+		AutoFarm = false,
+		DistanceToTitan = 0,
+		AutoReload = false,
+		ExpandNapeHitbox = false,
+		HitboxSize = 20,
+		VisualizeHitbox = false,
+		TitanESP = false,
+		AutoRefill = false,
+		ChangeCursor = false,
+		AutoRetry = false,
+		AutoSkipCutscenes = false,
+		DelayToKill = false,
+		DelayToKillAmount = 1,
+		HitAll = false,
+		AutoFamilySpin = false,
+		FamiliesToStop = {},
+		FamilyTiersToStop = {},
+		AutoSellPerks = false,
+		PerkTiersToSell = {},
+		SpecificPerksToSell = {},
+		AutoCreateTowers = false,
+		AutoRetrieveSupplyCrates = false,
+	}
+
+	function func(arg1)
+		local ok, result = pcall(function()
+			local v1 = syn and syn.read_file or readfile
+
+			if v1 then
+				return v1(arg1)
+			end
+
+			return nil
+		end)
+
+		if ok and result and result ~= "" then
+			return result
+		end
+
+		return nil
+	end
+
+	function func1(arg1, arg2)
+		pcall(function()
+			local v1 = syn and syn.write_file or writefile
+			if v1 then
+				v1(arg1, arg2)
+			end
+		end)
+	end
+
+	local function func2()
+		local v1 = func(v3)
+
+		if v1 then
+			local ok, result = pcall(function()
+				return HttpService:JSONDecode(v1)
+			end)
+			if ok and type(result) == "table" then
+				return result
+			end
+		end
+
+		return {}
+	end
+
+	local function func3(arg1)
+		local ok, result = pcall(function()
+			return HttpService:JSONEncode(arg1)
+		end)
+		if ok and result then
+			func1(v3, result)
+		end
+	end
+
+	local v4 = func2()
+
+	function func4(arg1)
+		if v4[arg1] ~= nil then
+			return v4[arg1]
+		end
+		return tbl[arg1]
+	end
+
+	function func5(arg1, arg2)
+		v4[arg1] = arg2
+		func3(v4)
+	end
+
+	module = loadstring(game:HttpGet("https://gist.githubusercontent.com/ssssssssss21/09b303c5a1cf601bda1370252c65712a/raw/d7c50c43db2b33c1f7516a10317ff642f77c89a6/UITest.luau"))()
+	Workspace = game:GetService("Workspace")
+	RunService = game:GetService("RunService")
+	UserInputService = game:GetService("UserInputService")
+	ReplicatedStorage = game:GetService("ReplicatedStorage")
+	VirtualInputManager = game:GetService("VirtualInputManager")
+	flag = false
+	flag1 = false
+	flag2 = false
+	num = 20
+	flag3 = false
+	flag4 = false
+	flag5 = false
+	flag6 = false
+	num1 = 1
+	flag7 = false
+	num2 = 1
+	num3 = 1
+	flag8 = false
+	flag9 = false
+	flag10 = false
+	flag11 = false
+end
+
+local flag12, flag13, flag14, num4, flag15, tbl1, tbl2, flag16, tbl3, tbl4, flag17, flag18, v16, flag19, v17, v18, tbl5, flag20, num5, flag21, num6, flag22, v19, v5, v6, v20, v21, func7, func8, func9, func11, func12, func13, func14, func17
+
+do
+	flag12 = false
+	flag13 = false
+	flag14 = false
+	num4 = 0
+	flag15 = false
+	tbl1 = {}
+	tbl2 = {}
+	flag16 = false
+	tbl3 = {}
+	tbl4 = {}
+	flag17 = false
+	flag18 = false
+	flag19 = false
+	tbl5 = {}
+	flag20 = false
+	num5 = 1
+	flag21 = false
+	num6 = 0
+	flag22 = false
+	v5 = getactors or syn and syn.getactors
+	v6 = run_on_actor or syn and syn.run_on_actor
+
+	local function func6()
+		if v20 and v21 then
+			return true
+		end
+
+		local Assets = ReplicatedStorage:WaitForChild("Assets", 15)
+		local v1 = Assets and Assets:WaitForChild("Remotes", 15)
+
+		if v1 then
+			v20 = v1:FindFirstChild("POST") or v1:WaitForChild("POST", 5)
+			v21 = v1:FindFirstChild("GET") or v1:WaitForChild("GET", 5)
+		end
+
+		return v20 ~= nil and v21 ~= nil
+	end
+
+	func6()
+
+	function func7()
+		local Characters = Workspace:FindFirstChild("Characters")
+		return Characters and Characters:FindFirstChild(LocalPlayer1.Name) or LocalPlayer1.Character
+	end
+
+	function func8()
+		local v1 = func7()
+		return v1 and v1:FindFirstChild("Rig_" .. LocalPlayer1.Name) or nil
+	end
+
+	function func9()
+		local v1 = func8()
+
+		if not v1 then
+			return false
+		end
+
+		local LeftLowerArm = v1:FindFirstChild("LeftLowerArm")
+		local RightLowerArm = v1:FindFirstChild("RightLowerArm")
+		return LeftLowerArm and LeftLowerArm:FindFirstChild("Spears") ~= nil or RightLowerArm and RightLowerArm:FindFirstChild("Spears") ~= nil or false
+	end
+
+	local function func10()
+		local v1 = func8()
+
+		if not v1 then
+			local v2 = func7()
+			local v3 = v2 and v2:GetAttribute("Spears")
+			return v3 and tonumber(v3) or 0
+		end
+
+		local v4 = v1:FindFirstChild("LeftLowerArm") and v1.LeftLowerArm:FindFirstChild("Spears")
+		local v5 = v1:FindFirstChild("RightLowerArm") and v1.RightLowerArm:FindFirstChild("Spears")
+
+		if not v4 and not v5 then
+			local v6 = func7()
+			local v7 = v6 and v6:GetAttribute("Spears")
+			return v7 and tonumber(v7) or 0
+		end
+
+		local num = 0
+
+		for i = 1, 16 do
+			local v8 = i % 2 == 0 and v5 or v4
+			local v9 = v8 and v8:FindFirstChild(tostring(i))
+
+			if v9 and v9:GetAttribute("Used") == nil and v9.Transparency < 0.9 then
+				num = num + 1
+			end
+		end
+
+		return num
+	end
+
+	function func11()
+		local v1 = func10()
+		local v2 = func7()
+		local v3 = v2 and v2:GetAttribute("Spears")
+
+		if v1 == 0 then
+			if v2 and v3 ~= 0 then
+				pcall(function()
+					v2:SetAttribute("Spears", 0)
+				end)
+			end
+			return true
+		end
+
+		if v3 ~= nil and tonumber(v3) ~= nil and tonumber(v3) <= 0 then
+			return true
+		end
+
+		return false
+	end
+
+	function func12()
+		if func11() then
+			return 0
+		end
+
+		local v1 = func8()
+
+		if v1 then
+			local v2 = v1:FindFirstChild("LeftLowerArm") and v1.LeftLowerArm:FindFirstChild("Spears")
+			local v3 = v1:FindFirstChild("RightLowerArm") and v1.RightLowerArm:FindFirstChild("Spears")
+
+			for i = 16, 1, -1 do
+				local v4 = i % 2 == 0 and v3 or v2
+				local v5 = v4 and v4:FindFirstChild(tostring(i))
+
+				if v5 and v5:GetAttribute("Used") == nil and v5.Transparency < 0.9 then
+					return 16
+				end
+			end
+		end
+
+		return 0
+	end
+
+	function func13()
+		if func9() then
+			return false
+		end
+
+		local v1 = func8()
+
+		if not v1 then
+			return false
+		end
+
+		for _, descendant in ipairs(v1:GetDescendants()) do
+			if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+				return true
+			end
+		end
+
+		return false
+	end
+
+	function func14()
+		if not func13() then
+			return
+		end
+		pcall(function()
+			v21:InvokeServer("Blades", "Reload")
+		end)
+	end
+
+	local v22
+
+	local function func15()
+		if v22 and v22.Parent and v22:IsA("BasePart") then
+			return v22
+		end
+
+		v22 = nil
+
+		pcall(function()
+			local tbl = {Workspace:FindFirstChild("Unclimbable"), Workspace:FindFirstChild("Climbable")}
+			for _, v1 in ipairs(tbl) do
+				if v1 then
+					for _, descendant in ipairs(v1:GetDescendants()) do
+						if descendant:IsA("BasePart") and descendant.Name == "Refill" then
+							v22 = descendant
+							return
+						end
+					end
+				end
+			end
+		end)
+
+		return v22
+	end
+
+	local function func16(arg1)
+		local v1 = Workspace:FindFirstChild("Characters") and Workspace.Characters:FindFirstChild(LocalPlayer1.Name) or LocalPlayer1.Character
+		local v2 = v1 and v1:FindFirstChild("HumanoidRootPart")
+
+		if v2 and arg1 then
+			v2.CFrame = arg1.CFrame + Vector3.new(0, 3, 0)
+			pcall(function()
+				v2.AssemblyLinearVelocity = Vector3.zero
+				v2.AssemblyAngularVelocity = Vector3.zero
+			end)
+		end
+	end
+
+	function func17(_)
+		local v1 = func15()
+
+		if not v1 then
+			return
+		end
+
+		func16(v1)
+		task.wait(0.5)
+		func6()
+
+		if v20 then
+			pcall(function()
+				v20:FireServer("Attacks", "Reload", v1)
+			end)
+		end
+
+		num4 = os.clock()
+	end
+end
+
+local func20, func21, func22, func23, func24, func25, func26, func27, func29, func32, func33, func34, func35, func36, func37, func38, func39, func40, func41, func42, func43, func44, func45, func46, func47
+
+do
+	local function func18()
+		local ok, result = pcall(function()
+			local v1 = LocalPlayer1.PlayerGui.Interface.HUD.Main.Top["7"].Blades.Sets.Text:match("^(%d+)%s*/")
+
+			if v1 then
+				return tonumber(v1)
+			end
+
+			return nil
+		end)
+
+		if ok then
+			return result
+		end
+
+		return nil
+	end
+
+	local function func19()
+		local ok, result = pcall(function()
+			local v1 = func8()
+
+			if not v1 then
+				return false
+			end
+
+			local flag = false
+
+			for _, descendant in ipairs(v1:GetDescendants()) do
+				if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+					flag = true
+					if not descendant:GetAttribute("Broken") then
+						return false
+					end
+				end
+			end
+
+			return flag
+		end)
+
+		if ok then
+			return result
+		end
+
+		return false
+	end
+
+	function func20()
+		if os.clock() - num4 < 5 then
+			return false
+		end
+
+		local v1 = func18()
+
+		if v1 == nil or v1 ~= 0 then
+			v15 = nil
+			return false
+		end
+
+		if v15 == nil then
+			v15 = os.clock()
+			return false
+		end
+
+		if os.clock() - v15 < 2 then
+			return false
+		end
+
+		return (func19())
+	end
+
+	function func21()
+		if flag5 then
+			return
+		end
+
+		if os.clock() - num4 < 5 then
+			return
+		end
+
+		flag5 = true
+		task.wait(0.05)
+
+		if func9() then
+			func17(true)
+		elseif func13() then
+			func14()
+			local v1 = os.clock()
+
+			while os.clock() - v1 < 1.8 do
+				task.wait(0.1)
+
+				local ok, result = pcall(function()
+					local v1 = func8()
+
+					if not v1 then
+						return false
+					end
+
+					local flag = false
+
+					for _, descendant in ipairs(v1:GetDescendants()) do
+						if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+							flag = true
+							if not descendant:GetAttribute("Broken") then
+								return false
+							end
+						end
+					end
+
+					return flag
+				end)
+
+				local v2
+
+				if ok then
+					v2 = result
+				else
+					v2 = false
+				end
+
+				if not v2 then
+					break
+				end
+			end
+		end
+
+		task.wait(0.2)
+		flag5 = false
+	end
+
+	function func22()
+		if flag11 then
+			return
+		end
+
+		if os.clock() - num4 < 5 then
+			return
+		end
+
+		flag11 = true
+		v15 = nil
+		func17(false)
+		v15 = nil
+		flag11 = false
+	end
+
+	function func23()
+		if flag5 or flag11 then
+			return false
+		end
+
+		local v1 = func7()
+
+		if not v1 then
+			return false
+		end
+
+		local Humanoid = v1:FindFirstChild("Humanoid")
+
+		if not Humanoid or Humanoid.Health <= 0 then
+			return false
+		end
+
+		if Workspace:FindFirstChild("Titans") ~= nil and v1:GetAttribute("Setup") ~= true then
+			return false
+		end
+
+		local v2 = LocalPlayer1 or Players1.LocalPlayer
+		local v3 = v2 and v2:FindFirstChild("PlayerGui")
+		local v4 = v3 and v3:FindFirstChild("Fullscreen")
+		local v5 = v4 and v4:FindFirstChild("Loading_Screen")
+
+		if v5 and v5.Visible == true then
+			return false
+		end
+
+		if v1:GetAttribute("Ragdolled") ~= nil or v1:GetAttribute("Shifter") ~= nil then
+			return false
+		end
+
+		if flag4 and func13() and func19() then
+			return false
+		end
+
+		local v6 = flag10 and func13()
+
+		if v6 then
+			local v7 = func18()
+			v6 = v7 ~= nil and v7 == 0
+		end
+
+		if v6 and func19() then
+			return false
+		end
+
+		if func9() and func11() then
+			return false
+		end
+
+		return true
+	end
+
+	function func24()
+		local tbl = {}
+		local Titans = Workspace:FindFirstChild("Titans")
+
+		if not Titans then
+			return tbl
+		end
+
+		for _, child in ipairs(Titans:GetChildren()) do
+			if child:IsA("Model") then
+				table.insert(tbl, child)
+			end
+		end
+
+		return tbl
+	end
+
+	function func25(arg1)
+		local Hitboxes = arg1:FindFirstChild("Hitboxes")
+
+		if not Hitboxes then
+			return nil
+		end
+
+		local Hit = Hitboxes:FindFirstChild("Hit")
+
+		if not Hit then
+			return nil
+		end
+
+		return Hit:FindFirstChild("Nape")
+	end
+
+	function func26(character)
+		if not character or not character.Parent then
+			return true
+		end
+
+		local HumanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+
+		if not HumanoidRootPart then
+			return true
+		end
+
+		if HumanoidRootPart.Anchored == true then
+			return true
+		end
+
+		local state = character:GetAttribute("State")
+
+		if state == "Dead" or state == "Die" or state == "Dying" then
+			return true
+		end
+
+		local Humanoid = character:FindFirstChild("Humanoid")
+
+		if Humanoid and Humanoid.Health <= 0 then
+			return true
+		end
+
+		return false
+	end
+
+	function func27(arg1)
+		if not arg1 or not arg1.Parent then
+			return false
+		end
+
+		local Titans = Workspace:FindFirstChild("Titans")
+
+		if not Titans then
+			return false
+		end
+
+		if arg1.Parent ~= Titans then
+			return false
+		end
+
+		return not func26(arg1)
+	end
+
+	local function func28()
+		pcall(function()
+			local v1 = func7()
+			local v2 = v1 and v1:FindFirstChild("Actor") or v5 and v5()[1]
+
+			if v2 and v6 then
+				v6(v2, [[
+                pcall(function()
+                    local obj = _G.__CachedHost
+                    if not obj or type(obj) ~= "table" or not rawget(obj, "Cache") then
+                        for _, v in ipairs(getgc(true)) do
+                            if type(v) == "table" and type(rawget(v, "Cache")) == "table" and rawget(v, "Services") and rawget(v, "Modules") then
+                                obj = v
+                                _G.__CachedHost = v
+                                break
+                            end
+                        end
+                    end
+                    if obj then
+                        obj.Spear_State = nil
+                        obj.Using_Spear = nil
+                        obj.Detonate = nil
+                        obj.Can_Detonate = nil
+
+                        if type(obj.Cache.Variables) == "table" and obj.Cache.Variables.Slash then
+                            obj.Cache.Variables.Slash.Slashing = false
+                            obj.Cache.Variables.Slash.Holding = false
+                            obj.Cache.Variables.Slash.Released = false
+                        end
+
+                        if obj.Events then
+                            if obj.Events.Spear_Stepped_2 then
+                                pcall(function() obj.Events.Spear_Stepped_2:Disconnect() end)
+                                obj.Events.Spear_Stepped_2 = nil
+                            end
+                            if obj.Events.Spear_Stepped then
+                                pcall(function() obj.Events.Spear_Stepped:Disconnect() end)
+                                obj.Events.Spear_Stepped = nil
+                            end
+                        end
+
+                        if type(obj.Cache.Interface) == "table" and obj.Cache.Interface.Cursor and obj.Cache.Interface.Cursor.Distance2 then
+                            obj.Cache.Interface.Cursor.Distance2.Visible = false
+                        end
+
+                        if type(obj.Cache.Tracks) == "table" then
+                            for name, track in pairs(obj.Cache.Tracks) do
+                                if tostring(name):find("Spear") or tostring(name):find("Hit") or tostring(name):find("Slash") then
+                                    pcall(function() track:Stop(0.1) end)
+                                end
+                            end
+                        end
+
+                        if type(obj.Cache.Animations) == "table" then
+                            for name, track in pairs(obj.Cache.Animations) do
+                                if tostring(name):find("Spear") or tostring(name):find("Hit") or tostring(name):find("Slash") then
+                                    pcall(function() track:Stop(0.1) end)
+                                end
+                            end
+                        end
+                    end
+                end)
+            ]])
+			end
+		end)
+
+		pcall(function()
+			local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+			local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+			local v2 = v1 and v1:FindFirstChild("Cursor")
+			local v3 = v2 and v2:FindFirstChild("Distance2")
+
+			if v3 then
+				v3.Visible = false
+			end
+		end)
+
+		pcall(function()
+			local Character = LocalPlayer1.Character
+			local v1 = Character and Character:FindFirstChild("Humanoid")
+			local v2 = v1 and v1:FindFirstChild("Animator")
+
+			if v2 then
+				for _, track in ipairs(v2:GetPlayingAnimationTracks()) do
+					if
+						track.Name:find("Spear")
+						or track.Name:find("Slash")
+						or track.Name:find("Hit")
+						or track.Name:find("Throw")
+					then
+						track:Stop(0.1)
+					end
+				end
+			end
+		end)
+	end
+
+	function func29(arg1)
+		if not func23() then
+			return false
+		end
+
+		local tbl = {}
+		local v1 = flag21 and 8 or 1
+
+		if type(arg1) == "table" and arg1[1] ~= nil then
+			for _, v2 in ipairs(arg1) do
+				if typeof(v2) == "Instance" then
+					if v2:IsA("BasePart") and v2.Name == "Nape" then
+						table.insert(tbl, v2)
+					else
+						local Hitboxes = v2:FindFirstChild("Hitboxes")
+						local v3
+
+						if not Hitboxes then
+							v3 = nil
+						else
+							local Hit = Hitboxes:FindFirstChild("Hit")
+							if not Hit then
+								v3 = nil
+							else
+								v3 = Hit:FindFirstChild("Nape")
+							end
+						end
+
+						if v3 then
+							table.insert(tbl, v3)
+						end
+					end
+					if #tbl >= v1 then
+						break
+					end
+				end
+			end
+		elseif typeof(arg1) == "Instance" then
+			if arg1:IsA("BasePart") and arg1.Name == "Nape" then
+				table.insert(tbl, arg1)
+			else
+				local v4 = func25(arg1)
+				if v4 then
+					table.insert(tbl, v4)
+				end
+			end
+		end
+
+		if #tbl == 0 then
+			return false
+		end
+
+		local v7 = func7()
+
+		if not v7 then
+			return false
+		end
+
+		local v8 = v7:FindFirstChild("Actor") or v5 and v5()[1]
+
+		if v8 and v6 then
+			pcall(function()
+				v6(v8, string.format(
+					'                local host = _G.__CachedHost\n                if type(host) ~= "table"\n                    or type(rawget(host, "Modules")) ~= "table"\n                    or type(rawget(host, "Cache")) ~= "table"\n                    or not host.Modules.Zones\n                then\n                    host = nil\n                    _G.__CachedHost = nil\n                    for _, obj in ipairs(getgc(true)) do\n                        if type(obj) == "table"\n                            and type(rawget(obj, "Modules")) == "table"\n                            and type(rawget(obj, "Cache")) == "table"\n                            and rawget(obj, "Services")\n                            and obj.Modules.Zones\n                        then\n                            host = obj\n                            _G.__CachedHost = obj\n                            break\n                        end\n                    end\n                end\n\n                if host then\n                    if host.Loadout and host.Loadout.Stats then\n                        host.Loadout.Stats.Crit_Chance = 100\n                        host.Loadout.Stats.Strike = %d\n                    end\n                    local zones = host.Modules.Zones\n                    if zones and not zones.__SymbioteCritHooked and type(zones.Damage_Check) == "function" then\n                        zones.__SymbioteCritHooked = true\n                        local origDamageCheck = zones.Damage_Check\n                        zones.Damage_Check = function(p2, p3, p4, p5, p6, p7, p8, p9)\n                            return origDamageCheck(p2, p3, p4, true, p6, p7, p8, p9)\n                        end\n                    end\n                end\n            ',
+					#tbl
+				))
+			end)
+		end
+
+		local v9 = func12()
+
+		if not v9 or v9 <= 0 then
+			if (flag4 or flag10) and not flag5 then
+				func21()
+			end
+			return false
+		end
+
+		local v12
+
+		if not pcall(function()
+			v12 = v21:InvokeServer("Spears", "S_Fire", tostring(v9))
+		end) or v12 ~= true then
+			local v10 = func12()
+			if v10 and v10 > 0 and v10 ~= v9 then
+				pcall(function()
+					v12 = v21:InvokeServer("Spears", "S_Fire", tostring(v10))
+				end)
+			end
+		end
+
+		if v12 == true then
+			task.wait(0.03)
+
+			for _, v11 in ipairs(tbl) do
+				if v11 and v11.Parent then
+					pcall(function()
+						v20:FireServer("Spears", "S_Explode", v11.Position, 2.5)
+					end)
+				end
+			end
+
+			func28()
+			return true
+		end
+
+		pcall(function()
+			v20:FireServer("Spears", "Reset")
+		end)
+
+		return false
+	end
+
+	local function func30(character)
+		if v19 then
+			v19:Disconnect()
+			v19 = nil
+		end
+
+		if not character then
+			return
+		end
+
+		local Humanoid = character:WaitForChild("Humanoid", 5)
+		local v1 = Humanoid and Humanoid:WaitForChild("Animator", 5)
+
+		if v1 then
+			v19 = v1.AnimationPlayed:Connect(function(arg1)
+				if flag and (arg1.Priority == Enum.AnimationPriority.Action4 or arg1.Priority == Enum.AnimationPriority.Action3 or arg1.Name:find("Hit") or arg1.Name:find("Slash")) then
+					arg1:Stop(0)
+				end
+			end)
+		end
+	end
+
+	LocalPlayer1.CharacterAdded:Connect(func30)
+	local v7 = Workspace:FindFirstChild("Characters") and Workspace.Characters:FindFirstChild(LocalPlayer1.Name) or LocalPlayer1.Character
+
+	if v7 then
+		func30(v7)
+	end
+
+	local function func31(arg1, canTouch)
+		local v1 = arg1 and arg1:FindFirstChild("Hitboxes")
+		local v2 = v1 and v1:FindFirstChild("Hit")
+
+		if v2 then
+			for _, child in ipairs(v2:GetChildren()) do
+				if child:IsA("BasePart") then
+					child.CanTouch = canTouch
+				end
+			end
+		end
+	end
+
+	function func32(arg1)
+		local Titans = Workspace:FindFirstChild("Titans")
+
+		if not Titans then
+			return
+		end
+
+		for _, child in ipairs(Titans:GetChildren()) do
+			func31(child, arg1)
+		end
+	end
+
+	function func33(arg1)
+		if flag22 or not func23() then
+			return false
+		end
+
+		if func9() then
+			return func29(arg1)
+		end
+
+		local tbl = {}
+		local tbl1 = {}
+		local v1 = flag21 and 8 or 1
+
+		if type(arg1) == "table" then
+			for _, v2 in ipairs(arg1) do
+				if typeof(v2) == "Instance" then
+					local v3 = v2:IsA("Model") and v2 or v2:FindFirstAncestorOfClass("Model")
+					local v4 = v2:IsA("BasePart") and v2.Name == "Nape" and v2
+
+					if not v4 then
+						v4 = v3
+						if v3 then
+							local Hitboxes = v3:FindFirstChild("Hitboxes")
+							if not Hitboxes then
+								v4 = nil
+							else
+								local Hit = Hitboxes:FindFirstChild("Hit")
+								if not Hit then
+									v4 = nil
+								else
+									v4 = Hit:FindFirstChild("Nape")
+								end
+							end
+						end
+					end
+
+					local v5 = v3 and v4
+
+					if v5 then
+						if not v3 or not v3.Parent then
+							v5 = false
+						else
+							local Titans = Workspace:FindFirstChild("Titans")
+							if not Titans then
+								v5 = false
+							elseif v3.Parent ~= Titans then
+								v5 = false
+							else
+								v5 = not func26(v3)
+							end
+						end
+					end
+
+					if v5 then
+						table.insert(tbl, v3)
+						table.insert(tbl1, v4)
+
+						if #tbl1 >= v1 then
+							break
+						end
+					end
+				end
+			end
+		elseif typeof(arg1) == "Instance" then
+			local v7 = arg1:IsA("Model") and arg1 or arg1:FindFirstAncestorOfClass("Model")
+			local v8 = arg1:IsA("BasePart") and arg1.Name == "Nape" and arg1 or v7 and func25(v7)
+
+			if v7 and v8 and func27(v7) then
+				table.insert(tbl, v7)
+				table.insert(tbl1, v8)
+			end
+		end
+
+		if #tbl1 == 0 then
+			return false
+		end
+
+		local v9 = func7()
+
+		if not v9 then
+			return false
+		end
+
+		local HumanoidRootPart = v9:FindFirstChild("HumanoidRootPart")
+		local Humanoid = v9:FindFirstChild("Humanoid")
+		local Hitbox = v9:FindFirstChild("Hitbox")
+		local Actor = v9:FindFirstChild("Actor")
+
+		if not HumanoidRootPart or not Humanoid then
+			return false
+		end
+
+		if Hitbox and Hitbox:IsA("BasePart") then
+			Hitbox.CanTouch = true
+		end
+
+		for _, v10 in ipairs(tbl) do
+			func31(v10, true)
+		end
+
+		flag22 = true
+		Humanoid.PlatformStand = false
+
+		pcall(function()
+			Humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+		end)
+
+		local Animator = Humanoid:FindFirstChild("Animator")
+
+		if Animator then
+			for _, track in ipairs(Animator:GetPlayingAnimationTracks()) do
+				if
+					track.Priority == Enum.AnimationPriority.Action4
+					or track.Priority == Enum.AnimationPriority.Action3
+					or track.Name:find("Hit")
+					or track.Name:find("Slash")
+				then
+					track:Stop(0)
+				end
+			end
+		end
+
+		local flag = false
+
+		if Actor and v6 then
+			local v11 = tostring(os.clock()) .. "_" .. tostring(math.random(1000, 9999))
+			local tbl2 = {}
+
+			for _, v12 in ipairs(tbl) do
+				table.insert(tbl2, v12.Name)
+				v12:SetAttribute("__SymbioteTarget", v11)
+			end
+
+			local v13 = table.pack(table.concat(tbl2, ","))
+			Actor:SetAttribute("TargetTitanNames", table.unpack(v13, 1, v13.n))
+			Actor:SetAttribute("TargetTitan", v11)
+			Actor:SetAttribute("SlashMaxTargets", #tbl1)
+			Actor:SetAttribute("SlashDone", false)
+			Actor:SetAttribute("SlashHandled", false)
+
+			pcall(function()
+				v6(Actor, [[
+                local Players = game:GetService("Players")
+                local lp = Players.LocalPlayer
+                local chars = workspace:FindFirstChild("Characters")
+                local c = (chars and chars:FindFirstChild(lp.Name)) or lp.Character
+                local act = c and c:FindFirstChild("Actor")
+                if not act then return end
+
+                local targetId = act:GetAttribute("TargetTitan")
+                local targetNamesStr = act:GetAttribute("TargetTitanNames") or ""
+                local nameMap = {}
+                for name in string.gmatch(targetNamesStr, "[^,]+") do
+                    nameMap[name] = true
+                end
+                local maxTargets = tonumber(act:GetAttribute("SlashMaxTargets")) or 1
+                local tit = workspace:FindFirstChild("Titans")
+                local napes = {}
+                if tit then
+                    for _, m in ipairs(tit:GetChildren()) do
+                        if (targetId and m:GetAttribute("__SymbioteTarget") == targetId) or nameMap[m.Name] then
+                            local np = m:FindFirstChild("Hitboxes") and m.Hitboxes:FindFirstChild("Hit") and m.Hitboxes.Hit:FindFirstChild("Nape")
+                            if np then
+                                table.insert(napes, np)
+                                if #napes >= maxTargets then
+                                    break
+                                end
+                            end
+                        end
+                    end
+                    if #napes == 0 then
+                        for _, m in ipairs(tit:GetChildren()) do
+                            if m:IsA("Model") and not m:GetAttribute("State") then
+                                local np = m:FindFirstChild("Hitboxes") and m.Hitboxes:FindFirstChild("Hit") and m.Hitboxes.Hit:FindFirstChild("Nape")
+                                if np then
+                                    table.insert(napes, np)
+                                    if #napes >= maxTargets then break end
+                                end
+                            end
+                        end
+                    end
+                end
+
+                local h = c and c:FindFirstChild("HumanoidRootPart")
+                local hm = c and c:FindFirstChild("Humanoid")
+                local hb = c and c:FindFirstChild("Hitbox")
+                if hb and hb:IsA("BasePart") then
+                    hb.CanTouch = true
+                end
+                local fireTouch = firetouchinterest or (debug and debug.firetouchinterest)
+
+                local host = _G.__CachedHost
+                if type(host) ~= "table"
+                    or type(rawget(host, "Modules")) ~= "table"
+                    or type(rawget(host, "Cache")) ~= "table"
+                    or host.Cache.Character ~= c
+                    or not host.Modules.Zones
+                    or not host.Modules.Input
+                    or not host.Modules.ODMG
+                    or not host.Modules.Effects
+                then
+                    host = nil
+                    _G.__CachedHost = nil
+                    local now = os.clock()
+                    local lastScan = _G.__LastHostScan or 0
+                    if (now - lastScan) >= 1 then
+                        _G.__LastHostScan = now
+                        for _, obj in ipairs(getgc(true)) do
+                            if type(obj) == "table"
+                                and type(rawget(obj, "Modules")) == "table"
+                                and type(rawget(obj, "Cache")) == "table"
+                                and obj.Cache.Character == c
+                                and obj.Modules.Zones
+                            then
+                                host = obj
+                                _G.__CachedHost = obj
+                                break
+                            end
+                        end
+                    end
+                end
+
+                if host and #napes > 0 and h and hm then
+                    act:SetAttribute("SlashHandled", true)
+                    pcall(function()
+                        local slash = host.Cache.Variables.Slash
+                        local odmg = host.Modules.ODMG
+                        local inputMod = host.Modules.Input
+                        local effects = host.Modules.Effects
+                        local zones = host.Modules.Zones
+
+                        if inputMod.Slashing then
+                            pcall(function() task.cancel(inputMod.Slashing) end)
+                            inputMod.Slashing = nil
+                        end
+                        if type(odmg.Events) == "table" then
+                            for _, ev in pairs(odmg.Events) do
+                                pcall(function() task.cancel(ev) end)
+                            end
+                            table.clear(odmg.Events)
+                        end
+
+                        if effects.Slash_State == true then
+                            pcall(function() effects.Slash(host, false, true) end)
+                            effects.Slash_State = false
+                        end
+
+                        host.Invoked = false
+                        if host.Modules.Shift then
+                            host.Modules.Shift.Stunned = false
+                        end
+
+                        if host.Loadout and host.Loadout.Stats then
+                            host.Loadout.Stats.Crit_Chance = 100
+                            host.Loadout.Stats.Strike = maxTargets
+                        end
+
+                        if not zones.__SymbioteCritHooked and type(zones.Damage_Check) == "function" then
+                            zones.__SymbioteCritHooked = true
+                            local origDamageCheck = zones.Damage_Check
+                            zones.Damage_Check = function(p2, p3, p4, p5, p6, p7, p8, p9)
+                                return origDamageCheck(p2, p3, p4, true, p6, p7, p8, p9)
+                            end
+                        end
+
+                        slash.Slashing = false
+                        slash.Released = false
+                        slash.Holding = false
+                        slash.Cooldown = false
+                        slash.Combo = 0
+                        table.clear(zones.Hit)
+
+                        if not host.__OrigTasks and type(odmg.Tasks) == "function" then
+                            host.__OrigTasks = odmg.Tasks
+                        end
+                        odmg.Tasks = function() end
+                        pcall(function() odmg.M1(host, false) end)
+                        if host.__OrigTasks then
+                            odmg.Tasks = host.__OrigTasks
+                        end
+
+                        slash.Slashing = true
+                        slash.Released = false
+                        slash.Holding = false
+                        slash.Type = "Air"
+                        slash.Last = tick() - 0.65
+                        zones.Time_Difference = 0.65
+
+                        task.wait(0.04)
+
+                        table.clear(zones.Hit)
+                        pcall(function() inputMod.Slash(host, h, hm) end)
+                        slash.Slashing = true
+                        slash.Released = true
+                        slash.Holding = false
+                        slash.Type = "Air"
+
+                        if effects.Slash_State ~= true then
+                            pcall(function() effects.Slash(host, true, true) end)
+                            effects.Slash_State = true
+                        end
+                        host:Send("Attacks", "Slash", true)
+
+                        local a = hm:FindFirstChild("Animator")
+                        if a then
+                            for _, track in ipairs(a:GetPlayingAnimationTracks()) do
+                                if track.Priority == Enum.AnimationPriority.Action4 or track.Priority == Enum.AnimationPriority.Action3 or track.Name:find("Hit") or track.Name:find("Slash") then
+                                    track:Stop(0)
+                                end
+                            end
+                        end
+
+                        for _, np in ipairs(napes) do
+                            table.insert(zones.Hit, np)
+                            host:Send("Hitboxes", "Register", np, 0.65)
+                            if fireTouch and hb then
+                                pcall(function()
+                                    fireTouch(hb, np, 0)
+                                    fireTouch(hb, np, 1)
+                                end)
+                            end
+                        end
+
+                        task.wait(0.12)
+
+                        if inputMod.Slashing then
+                            pcall(function() task.cancel(inputMod.Slashing) end)
+                            inputMod.Slashing = nil
+                        end
+                        slash.Slashing = false
+                        slash.Released = false
+                        slash.Holding = false
+                        pcall(function() effects.Slash(host, false, true) end)
+                        if effects.Slash_State ~= false then
+                            effects.Slash_State = false
+                        end
+                        host:Send("Attacks", "Slash", false)
+                    end)
+                end
+
+                act:SetAttribute("SlashDone", true)
+            ]])
+			end)
+
+			local v14 = os.clock()
+
+			while os.clock() - v14 < 0.22 do
+				if Actor:GetAttribute("SlashDone") == true then
+					break
+				end
+				task.wait(0.02)
+			end
+
+			flag = Actor:GetAttribute("SlashHandled") == true
+		end
+
+		if not flag then
+			pcall(function()
+				v20:FireServer("Attacks", "Slash", true)
+			end)
+
+			for _, v15 in ipairs(tbl1) do
+				if v15 and v15.Parent then
+					pcall(function()
+						v20:FireServer("Hitboxes", "Register", v15, 0.65)
+					end)
+
+					local firetouchinterestRef = firetouchinterest
+
+					if not firetouchinterestRef then
+						firetouchinterestRef = debug
+						firetouchinterestRef = firetouchinterestRef and debug.firetouchinterest
+					end
+
+					if firetouchinterestRef and Hitbox then
+						pcall(function()
+							local firetouchinterestRefRef = firetouchinterestRef
+							firetouchinterestRefRef(Hitbox, v15, 0)
+							firetouchinterestRefRef(Hitbox, v15, 1)
+						end)
+					end
+				end
+			end
+
+			task.wait(0.12)
+
+			pcall(function()
+				v20:FireServer("Attacks", "Slash", false)
+			end)
+		end
+
+		flag22 = false
+		return true
+	end
+
+	local connection
+
+	function func34()
+		if connection then
+			return
+		end
+		connection = RunService.Stepped:Connect(function()
+			local Character = LocalPlayer1.Character
+			if Character then
+				for _, descendant in pairs(Character:GetDescendants()) do
+					if descendant:IsA("BasePart") then
+						descendant.CanCollide = false
+					end
+				end
+			end
+		end)
+	end
+
+	function func35()
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+
+		local Character = LocalPlayer1.Character
+
+		if Character then
+			for _, descendant in pairs(Character:GetDescendants()) do
+				if descendant:IsA("BasePart") then
+					descendant.CanCollide = true
+				end
+			end
+		end
+	end
+
+	local connection1
+
+	function func36()
+		if connection1 then
+			connection1:Disconnect()
+		end
+		connection1 = RunService.Heartbeat:Connect(function()
+			if not flag6 then
+				return
+			end
+
+			local Character = LocalPlayer1.Character
+
+			if not Character then
+				return
+			end
+
+			local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+
+			if not HumanoidRootPart then
+				return
+			end
+
+			local Humanoid = Character:FindFirstChild("Humanoid")
+
+			if not Humanoid or Humanoid.Health <= 0 then
+				return
+			end
+
+			local MoveDirection = Humanoid.MoveDirection
+
+			if MoveDirection.Magnitude < 0.1 then
+				return
+			end
+
+			HumanoidRootPart.CFrame = HumanoidRootPart.CFrame + MoveDirection.Unit * num1
+		end)
+	end
+
+	function func37()
+		if connection1 then
+			connection1:Disconnect()
+			connection1 = nil
+		end
+	end
+
+	local connection2
+	local num7 = 0
+
+	function func38()
+		if connection2 then
+			connection2:Disconnect()
+		end
+
+		num7 = 0
+
+		connection2 = RunService.Heartbeat:Connect(function(deltaTime)
+			if not flag7 then
+				return
+			end
+
+			local Character = LocalPlayer1.Character
+
+			if not Character then
+				return
+			end
+
+			local HumanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+
+			if not HumanoidRootPart then
+				return
+			end
+
+			local Humanoid = Character:FindFirstChild("Humanoid")
+
+			if not Humanoid or Humanoid.Health <= 0 then
+				return
+			end
+
+			local MoveDirection = Humanoid.MoveDirection
+
+			if MoveDirection.Magnitude < 0.1 then
+				num7 = 0
+				return
+			end
+
+			num7 = num7 + deltaTime
+
+			if num7 < num3 * 0.1 then
+				return
+			end
+
+			num7 = 0
+			HumanoidRootPart.CFrame = HumanoidRootPart.CFrame + MoveDirection.Unit * num2
+		end)
+	end
+
+	function func39()
+		if connection2 then
+			connection2:Disconnect()
+			connection2 = nil
+		end
+		num7 = 0
+	end
+
+	local connection3
+
+	function func40()
+		if connection3 then
+			return
+		end
+		connection3 = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+			if not flag8 then
+				return
+			end
+
+			if gameProcessed then
+				return
+			end
+
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+				return
+			end
+
+			if not (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)) then
+				return
+			end
+
+			local Character = LocalPlayer1.Character
+			local v1 = Character and Character:FindFirstChild("HumanoidRootPart")
+
+			if not v1 then
+				return
+			end
+
+			local CurrentCamera = Workspace.CurrentCamera
+			local MouseLocation = UserInputService:GetMouseLocation()
+			local v2 = CurrentCamera:ViewportPointToRay(MouseLocation.X, MouseLocation.Y)
+			local raycastParams = RaycastParams.new()
+			raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+			raycastParams.FilterDescendantsInstances = {Character}
+			local v3 = Workspace:Raycast(v2.Origin, v2.Direction * 5000, raycastParams)
+
+			if v3 then
+				v1.CFrame = CFrame.new(v3.Position + Vector3.new(0, 3, 0)) * (v1.CFrame - v1.CFrame.Position)
+			end
+		end)
+	end
+
+	function func41()
+		if connection3 then
+			connection3:Disconnect()
+			connection3 = nil
+		end
+	end
+
+	local connection4
+
+	function func42()
+		if connection4 then
+			connection4:Disconnect()
+		end
+		connection4 = UserInputService.JumpRequest:Connect(function()
+			if not flag9 then
+				return
+			end
+
+			local Character = LocalPlayer1.Character
+			local v1 = Character and Character:FindFirstChild("Humanoid")
+
+			if v1 then
+				v1:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end)
+	end
+
+	function func43()
+		if connection4 then
+			connection4:Disconnect()
+			connection4 = nil
+		end
+	end
+
+	local connection5
+	local Visible
+
+	function func44()
+		local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+		local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+		local v2 = v1 and v1:FindFirstChild("Cursor")
+
+		if v2 and Visible == nil then
+			Visible = v2.Visible
+		end
+
+		if v2 then
+			v2.Visible = false
+		end
+
+		UserInputService.MouseIconEnabled = true
+
+		if connection5 then
+			connection5:Disconnect()
+		end
+
+		connection5 = RunService.Heartbeat:Connect(function()
+			if not flag12 then
+				return
+			end
+
+			if not v2 or not v2.Parent then
+				local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+				local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+				v2 = v1 and v1:FindFirstChild("Cursor")
+			end
+
+			if v2 then
+				v2.Visible = false
+			end
+		end)
+	end
+
+	function func45()
+		if connection5 then
+			connection5:Disconnect()
+			connection5 = nil
+		end
+
+		local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+		local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+		local v2 = v1 and v1:FindFirstChild("Cursor")
+
+		if v2 then
+			v2.Visible = Visible ~= nil and Visible or true
+		end
+
+		Visible = nil
+	end
+
+	local v23
+	local v24
+
+	function func46()
+		if v23 then
+			v23:Disconnect()
+			v23 = nil
+		end
+		if v24 then
+			task.cancel(v24)
+			v24 = nil
+		end
+	end
+
+	function func47()
+		func46()
+		v24 = task.spawn(function()
+			local PlayerGui = LocalPlayer1:WaitForChild("PlayerGui", 15)
+			local v1 = PlayerGui and PlayerGui:WaitForChild("Interface", 15)
+			local v2 = v1 and v1:WaitForChild("Rewards", 15)
+
+			if not v2 or not flag13 then
+				return
+			end
+
+			if v2.Visible then
+				task.wait(1)
+				if flag13 then
+					pcall(function()
+						v21:InvokeServer("Functions", "Retry", "Add")
+					end)
+				end
+			end
+
+			v23 = v2:GetPropertyChangedSignal("Visible"):Connect(function()
+				if not flag13 or not v2.Visible then
+					return
+				end
+
+				task.wait(1)
+
+				if flag13 then
+					pcall(function()
+						v21:InvokeServer("Functions", "Retry", "Add")
+					end)
+				end
+			end)
+
+			v24 = nil
+		end)
+	end
+end
+
+local func51, func52, func53, func54, func56, func63, func66, func67, func68, func69, func70, playerTab, autoFarmTab, variousTab, statsTab
+
+do
+	local v25
+	local flag23 = false
+	local v26
+
+	local function func48(arg1)
+		local v1 = getnilinstances or get_nil_instances
+
+		if not v1 then
+			return nil
+		end
+
+		local v2 = v1()
+
+		if type(v2) == "table" then
+			for _, v3 in ipairs(v2) do
+				if v3.Name == arg1 then
+					return v3
+				end
+			end
+		end
+
+		return nil
+	end
+
+	local function func49(arg1)
+		pcall(function()
+			VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+			task.wait(0.05)
+			VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+		end)
+
+		local v1 = arg1 and (arg1:FindFirstChild("Interact") or arg1:FindFirstChildWhichIsA("GuiButton", true))
+
+		if v1 then
+			if firesignal then
+				pcall(function()
+					firesignal(v1.MouseButton1Click)
+				end)
+
+				pcall(function()
+					firesignal(v1.MouseButton1Down)
+				end)
+
+				pcall(function()
+					firesignal(v1.MouseButton1Up)
+				end)
+
+				pcall(function()
+					firesignal(v1.Activated)
+				end)
+			end
+			if v1.AbsolutePosition and v1.AbsoluteSize then
+				local v2 = v1.AbsolutePosition + v1.AbsoluteSize / 2
+				pcall(function()
+					VirtualInputManager:SendMouseButtonEvent(v2.X, v2.Y, 0, true, game, 0)
+					task.wait(0.05)
+					VirtualInputManager:SendMouseButtonEvent(v2.X, v2.Y, 0, false, game, 0)
+				end)
+			end
+		end
+	end
+
+	local function func50(arg1)
+		if not flag14 or flag23 then
+			return
+		end
+
+		if not (arg1 and arg1.Visible) then
+			return
+		end
+
+		flag23 = true
+		local v1 = func48("Middle")
+
+		if v1 then
+			pcall(function()
+				v20:FireServer("Functions", "Finished", v1)
+			end)
+		end
+
+		task.wait(0.3)
+
+		if flag14 and arg1 and arg1.Visible then
+			func49(arg1)
+		end
+
+		task.wait(0.5)
+		flag23 = false
+	end
+
+	function func51()
+		if v25 then
+			v25:Disconnect()
+			v25 = nil
+		end
+
+		if v26 then
+			task.cancel(v26)
+			v26 = nil
+		end
+
+		flag23 = false
+	end
+
+	function func52()
+		func51()
+		v26 = task.spawn(function()
+			local PlayerGui = LocalPlayer1:WaitForChild("PlayerGui", 15)
+			local v1 = PlayerGui and PlayerGui:WaitForChild("Interface", 15)
+			local v2 = v1 and v1:WaitForChild("Skip", 15)
+
+			if not v2 or not flag14 then
+				return
+			end
+
+			if v2.Visible then
+				task.spawn(function()
+					func50(v2)
+				end)
+			end
+
+			v25 = v2:GetPropertyChangedSignal("Visible"):Connect(function()
+				if not flag14 or not v2.Visible then
+					return
+				end
+				task.spawn(function()
+					func50(v2)
+				end)
+			end)
+
+			v26 = nil
+		end)
+	end
+
+	local tbl6 = {}
+	local tbl7 = {}
+
+	function func53(arg1)
+		local v1 = arg1 or num
+		local v2 = func24()
+
+		for _, v3 in ipairs(v2) do
+			local Hitboxes = v3:FindFirstChild("Hitboxes")
+			local v4
+
+			if not Hitboxes then
+				v4 = nil
+			else
+				local Hit = Hitboxes:FindFirstChild("Hit")
+				if not Hit then
+					v4 = nil
+				else
+					v4 = Hit:FindFirstChild("Nape")
+				end
+			end
+
+			if v4 and v4:IsA("BasePart") then
+				if not tbl6[v3] then
+					tbl6[v3] = v4.Size
+				end
+
+				local v5 = math.max(v4.Size.X, v4.Size.Y, v4.Size.Z)
+
+				if math.abs(v5 - v1) > 0.01 then
+					v4.Size = Vector3.new(v1, v1, v1)
+				end
+			end
+		end
+
+		for k in pairs(tbl6) do
+			if not k.Parent then
+				tbl6[k] = nil
+			end
+		end
+	end
+
+	function func54()
+		local v1 = func24()
+
+		for _, v2 in ipairs(v1) do
+			local Hitboxes = v2:FindFirstChild("Hitboxes")
+			local v3
+
+			if not Hitboxes then
+				v3 = nil
+			else
+				local Hit = Hitboxes:FindFirstChild("Hit")
+				if not Hit then
+					v3 = nil
+				else
+					v3 = Hit:FindFirstChild("Nape")
+				end
+			end
+
+			if v3 and v3:IsA("BasePart") then
+				if tbl6[v2] then
+					v3.Size = tbl6[v2]
+					tbl6[v2] = nil
+				end
+			end
+		end
+
+		for k in pairs(tbl6) do
+			if not k.Parent then
+				tbl6[k] = nil
+			end
+		end
+	end
+
+	local function func55()
+		if not flag3 then
+			return
+		end
+
+		local v1 = func24()
+		local tbl = {}
+
+		for _, v2 in ipairs(v1) do
+			tbl[v2] = true
+			local Hitboxes = v2:FindFirstChild("Hitboxes")
+			local v3
+
+			if not Hitboxes then
+				v3 = nil
+			else
+				local Hit = Hitboxes:FindFirstChild("Hit")
+				if not Hit then
+					v3 = nil
+				else
+					v3 = Hit:FindFirstChild("Nape")
+				end
+			end
+
+			if v3 and v3:IsA("BasePart") then
+				if not tbl7[v2] then
+					local selectionBox = Instance.new("SelectionBox")
+					selectionBox.Color3 = Color3.fromRGB(255, 50, 50)
+					selectionBox.LineThickness = 0.08
+					selectionBox.SurfaceTransparency = 1
+					selectionBox.Adornee = v3
+					selectionBox.Parent = Workspace.CurrentCamera
+					tbl7[v2] = selectionBox
+				end
+			end
+		end
+
+		for k, v4 in pairs(tbl7) do
+			if not tbl[k] then
+				if v4 and v4.Parent then
+					v4:Destroy()
+				end
+				tbl7[k] = nil
+			end
+		end
+	end
+
+	function func56()
+		for _, v1 in pairs(tbl7) do
+			if v1 and v1.Parent then
+				v1:Destroy()
+			end
+		end
+		tbl7 = {}
+	end
+
+	local num8 = 0
+
+	RunService.Heartbeat:Connect(function()
+		local v1 = os.clock()
+
+		if v1 - num8 < 0.5 then
+			return
+		end
+
+		num8 = v1
+
+		if flag2 then
+			func53(flag and 100 or num)
+		end
+
+		if flag3 then
+			func55()
+		end
+	end)
+
+	local function func57(character)
+		local v1 = func25(character) or character and character:FindFirstChild("HumanoidRootPart")
+
+		if not v1 then
+			return nil
+		end
+
+		if func9() then
+			local LookVector = v1.CFrame.LookVector
+			local v2 = 75 + num6
+			local v3 = v1.Position + Vector3.new(0, 48, 0) - LookVector * v2
+			return CFrame.lookAt(v3, v1.Position)
+		end
+
+		local v4 = os.clock() * 8
+		local v5 = 55 + num6
+		local v6 = v1.Position + Vector3.new(math.cos(v4) * 32, v5, math.sin(v4) * 32)
+		local v7 = v4 + 0.2
+		local v8 = v1.Position + Vector3.new(math.cos(v7) * 32, v5, math.sin(v7) * 32)
+		return CFrame.lookAt(v6, v8)
+	end
+
+	local function func58(arg1)
+		local huge = math.huge
+		local v1 = -math.huge
+
+		for _, descendant in ipairs(arg1:GetDescendants()) do
+			if descendant:IsA("BasePart") then
+				local v2 = descendant.Position.Y + descendant.Size.Y / 2
+				local v3 = descendant.Position.Y - descendant.Size.Y / 2
+
+				if v2 > v1 then
+					v1 = v2
+				end
+
+				if v3 < huge then
+					huge = v3
+				end
+			end
+		end
+
+		if v1 == -math.huge then
+			return 0
+		end
+
+		return v1 - huge
+	end
+
+	local function func59(arg1)
+		local Titans = Workspace:FindFirstChild("Titans")
+
+		if not Titans then
+			return nil
+		end
+
+		local v3
+		local v1 = -math.huge
+
+		for _, child in ipairs(Titans:GetChildren()) do
+			if child:IsA("Model") and child ~= arg1 and func27(child) then
+				local v2 = func58(child)
+				if v2 > v1 then
+					v1 = v2
+					v3 = child
+				end
+			end
+		end
+
+		return v3
+	end
+
+	local function func60(arg1)
+		local Titans = Workspace:FindFirstChild("Titans")
+
+		if not Titans then
+			return nil
+		end
+
+		local tbl = {}
+
+		for _, child in ipairs(Titans:GetChildren()) do
+			local v1 = child:IsA("Model") and child ~= arg1 and func27(child)
+
+			if v1 then
+				local Hitboxes = child:FindFirstChild("Hitboxes")
+				if not Hitboxes then
+					v1 = nil
+				else
+					local Hit = Hitboxes:FindFirstChild("Hit")
+					if not Hit then
+						v1 = nil
+					else
+						v1 = Hit:FindFirstChild("Nape")
+					end
+				end
+			end
+
+			if v1 then
+				table.insert(tbl, child)
+			end
+		end
+
+		if #tbl == 0 then
+			return nil
+		end
+
+		if #tbl == 1 then
+			return tbl[1]
+		end
+
+		local v2 = tbl[1]
+		local num = -1
+
+		for _, v3 in ipairs(tbl) do
+			local Hitboxes1 = v3:FindFirstChild("Hitboxes")
+			local v4
+
+			if not Hitboxes1 then
+				v4 = nil
+			else
+				local Hit1 = Hitboxes1:FindFirstChild("Hit")
+				if not Hit1 then
+					v4 = nil
+				else
+					v4 = Hit1:FindFirstChild("Nape")
+				end
+			end
+
+			local v5 = v4 and v4.Position
+
+			if v5 then
+				local num1 = 0
+
+				for _, v6 in ipairs(tbl) do
+					local Hitboxes2 = v6:FindFirstChild("Hitboxes")
+					local v7
+
+					if not Hitboxes2 then
+						v7 = nil
+					else
+						local Hit2 = Hitboxes2:FindFirstChild("Hit")
+						if not Hit2 then
+							v7 = nil
+						else
+							v7 = Hit2:FindFirstChild("Nape")
+						end
+					end
+
+					if v7 and (v7.Position - v5).Magnitude <= 135 then
+						num1 = num1 + 1
+					end
+				end
+
+				if num1 > num then
+					num = num1
+					v2 = v3
+				end
+			end
+		end
+
+		return v2
+	end
+
+	local num9 = 0
+
+	local function func61(arg1)
+		if not arg1 or not arg1.Parent then
+			return false
+		end
+
+		local Watch_Tower = arg1:FindFirstChild("Watch_Tower")
+
+		if not Watch_Tower then
+			return false
+		end
+
+		if Watch_Tower:FindFirstChild("H") then
+			return false
+		end
+
+		local Circle = arg1:FindFirstChild("Circle")
+
+		if not Circle then
+			return false
+		end
+
+		local Beam1 = Circle:FindFirstChild("Beam1")
+
+		if not Beam1 or not Beam1:IsA("BasePart") then
+			return false
+		end
+
+		return true
+	end
+
+	local function func62(arg1)
+		local v1 = arg1 and arg1:FindFirstChild("Circle")
+		local v2 = v1 and v1:FindFirstChild("Hitbox")
+
+		if v2 and v2:IsA("BasePart") then
+			pcall(function()
+				v2.Size = Vector3.new(1984, 1984, 1984)
+			end)
+		end
+	end
+
+	function func63()
+		for _, child in ipairs(Workspace:GetChildren()) do
+			if child:IsA("Model") and child.Name:find("WatchTower") then
+				func62(child)
+				if func61(child) then
+					return child
+				end
+			end
+		end
+
+		local v1 = Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("Unclimbable")
+
+		if v1 then
+			for _, child1 in ipairs(v1:GetChildren()) do
+				if child1:IsA("Model") and child1.Name:find("WatchTower") then
+					func62(child1)
+					if func61(child1) then
+						return child1
+					end
+				end
+			end
+		end
+
+		local v2 = os.clock()
+
+		if v2 - num9 > 2 then
+			num9 = v2
+			local Map = Workspace:FindFirstChild("Map")
+
+			if Map then
+				for _, descendant in ipairs(Map:GetDescendants()) do
+					if descendant:IsA("Model") and descendant.Name:find("WatchTower") then
+						func62(descendant)
+						if func61(descendant) then
+							return descendant
+						end
+					end
+				end
+			end
+		end
+
+		return nil
+	end
+
+	local function func64(arg1, arg2, cFrame)
+		if not arg1 or not cFrame then
+			return
+		end
+
+		v18 = cFrame
+		arg1.CFrame = cFrame
+
+		if func9() then
+			if arg2 then
+				arg2.PlatformStand = true
+			end
+			pcall(function()
+				arg1.AssemblyLinearVelocity = Vector3.zero
+				arg1.AssemblyAngularVelocity = Vector3.zero
+			end)
+		else
+			if arg2 then
+				arg2.PlatformStand = false
+				pcall(function()
+					arg2:ChangeState(Enum.HumanoidStateType.Freefall)
+				end)
+			end
+			pcall(function()
+				arg1.AssemblyLinearVelocity = cFrame.LookVector * 160
+				arg1.AssemblyAngularVelocity = Vector3.zero
+			end)
+		end
+	end
+
+	local function func65(arg1)
+		if not arg1 or not func27(arg1) then
+			return
+		end
+
+		if flag19 or flag17 and v16 then
+			return
+		end
+
+		local v1 = func7()
+
+		if not v1 then
+			return
+		end
+
+		local HumanoidRootPart = v1:FindFirstChild("HumanoidRootPart")
+		local Humanoid = v1:FindFirstChild("Humanoid")
+		local v2 = func57(arg1)
+
+		if HumanoidRootPart and v2 then
+			func64(HumanoidRootPart, Humanoid, v2)
+		end
+	end
+
+	function func66()
+		if not (flag or flag17) then
+			if v17 then
+				v17:Disconnect()
+				v17 = nil
+			end
+
+			v18 = nil
+			local v1 = func7()
+			local v2 = v1 and v1:FindFirstChild("Humanoid")
+
+			if v2 then
+				v2.PlatformStand = false
+			end
+
+			return
+		end
+
+		if v17 then
+			return
+		end
+
+		v17 = RunService.Heartbeat:Connect(function()
+			if not (flag or flag17) then
+				if v17 then
+					v17:Disconnect()
+					v17 = nil
+				end
+
+				v18 = nil
+				local v1 = func7()
+				local v2 = v1 and v1:FindFirstChild("Humanoid")
+
+				if v2 then
+					v2.PlatformStand = false
+				end
+
+				return
+			end
+
+			if flag19 then
+				return
+			end
+
+			local v3 = func7()
+
+			if not v3 then
+				return
+			end
+
+			local Humanoid = v3:FindFirstChild("Humanoid")
+
+			if not Humanoid or Humanoid.Health <= 0 then
+				return
+			end
+
+			local HumanoidRootPart = v3:FindFirstChild("HumanoidRootPart")
+
+			if not HumanoidRootPart then
+				return
+			end
+
+			if Workspace:FindFirstChild("Titans") ~= nil and v3:GetAttribute("Setup") ~= true then
+				return
+			end
+
+			local v4 = LocalPlayer1 or Players1.LocalPlayer
+			local v5 = v4 and v4:FindFirstChild("PlayerGui")
+			local v6 = v5 and v5:FindFirstChild("Fullscreen")
+			local v7 = v6 and v6:FindFirstChild("Loading_Screen")
+
+			if v7 and v7.Visible == true then
+				return
+			end
+
+			local v10
+
+			if flag17 then
+				if v16 and not func61(v16) then
+					v16 = nil
+				end
+
+				if not v16 then
+					v16 = func63()
+					if v16 then
+						func62(v16)
+					end
+				end
+
+				if v16 and func61(v16) then
+					local v8 = v16
+					func62(v8)
+					local Circle = v8:FindFirstChild("Circle")
+					local v9 = Circle and Circle:FindFirstChild("Beam1")
+
+					if v9 and v9:IsA("BasePart") then
+						v10 = v9.CFrame + Vector3.new(0, 200, 0)
+					end
+				end
+			end
+
+			if not v10 and flag and not flag11 and not (flag5 and func9()) then
+				if v14 and func27(v14) then
+					v10 = func57(v14)
+				else
+					v10 = v18 or HumanoidRootPart.CFrame
+				end
+			end
+
+			if v10 then
+				func64(HumanoidRootPart, Humanoid, v10)
+			elseif not flag and not v16 then
+				Humanoid.PlatformStand = false
+			end
+		end)
+	end
+
+	Workspace.DescendantAdded:Connect(function(descendant)
+		if not flag17 then
+			return
+		end
+		if descendant:IsA("Model") and descendant.Name:find("WatchTower") then
+			task.delay(0.2, function()
+				func62(descendant)
+			end)
+		elseif
+			descendant.Name == "Hitbox"
+			and descendant.Parent
+			and descendant.Parent.Name == "Circle"
+			and descendant.Parent.Parent
+			and descendant.Parent.Parent.Name:find("WatchTower")
+		then
+			pcall(function()
+				descendant.Size = Vector3.new(1984, 1984, 1984)
+			end)
+		end
+	end)
+
+	local v27
+	local tbl8 = {}
+
+	function func67()
+		if not flag18 then
+			return
+		end
+
+		local Unclimbable = Workspace:FindFirstChild("Unclimbable")
+
+		if not Unclimbable then
+			return
+		end
+
+		local v1 = tick()
+
+		for k in pairs(tbl8) do
+			if not k.Parent or v1 > (tbl8[k] or 0) then
+				tbl8[k] = nil
+			end
+		end
+
+		local tbl = {}
+
+		for _, child in ipairs(Unclimbable:GetChildren()) do
+			if child:IsA("Model") and child.Name:find("ThunderSpear") then
+				if not tbl8[child] or v1 > tbl8[child] then
+					table.insert(tbl, child)
+				end
+			end
+		end
+
+		if #tbl == 0 then
+			return
+		end
+
+		local Character = LocalPlayer1.Character
+		local v2 = Character and Character:FindFirstChild("HumanoidRootPart")
+
+		if not v2 then
+			return
+		end
+
+		flag19 = true
+
+		for _, v3 in ipairs(tbl) do
+			if not flag18 then
+				break
+			end
+
+			tbl8[v3] = tick() + 4
+			local Hitbox = v3:FindFirstChild("Hitbox")
+			Hitbox = Hitbox or v3:FindFirstChild("Hitbox", true)
+
+			if Hitbox and Hitbox:IsA("BasePart") then
+				pcall(function()
+					Hitbox.Size = Vector3.new(1984, 1984, 1984)
+				end)
+
+				v2.CFrame = Hitbox.CFrame
+
+				pcall(function()
+					v2.AssemblyLinearVelocity = Vector3.zero
+					v2.AssemblyAngularVelocity = Vector3.zero
+				end)
+
+				task.wait(0.2)
+			elseif v3.PrimaryPart then
+				v2.CFrame = v3.PrimaryPart.CFrame
+				task.wait(0.2)
+			end
+		end
+
+		if flag18 then
+			local Supplies_Circle = Unclimbable:FindFirstChild("Supplies_Circle")
+			if Supplies_Circle then
+				local v4 = Supplies_Circle:FindFirstChild("Hitbox") or Supplies_Circle:FindFirstChild("Hitbox", true)
+				if v4 and v4:IsA("BasePart") then
+					pcall(function()
+						v4.Size = Vector3.new(1984, 1984, 1984)
+					end)
+
+					v2.CFrame = v4.CFrame
+
+					pcall(function()
+						v2.AssemblyLinearVelocity = Vector3.zero
+						v2.AssemblyAngularVelocity = Vector3.zero
+					end)
+
+					task.wait(0.2)
+				elseif Supplies_Circle.PrimaryPart then
+					v2.CFrame = Supplies_Circle.PrimaryPart.CFrame
+					task.wait(0.2)
+				end
+			end
+		end
+
+		flag19 = false
+	end
+
+	function func68()
+		if v27 then
+			return
+		end
+		v27 = task.spawn(function()
+			while flag18 do
+				func67()
+				task.wait(0.5)
+			end
+			v27 = nil
+		end)
+	end
+
+	local Unclimbable = Workspace:FindFirstChild("Unclimbable")
+
+	if Unclimbable then
+		if Unclimbable then
+			Unclimbable.ChildAdded:Connect(function(child)
+				if flag18 and child:IsA("Model") and child.Name:find("ThunderSpear") then
+					task.delay(0.1, func67)
+				end
+			end)
+		end
+	end
+
+	Workspace.ChildAdded:Connect(function(child)
+		if child.Name == "Unclimbable" then
+			if child then
+				child.ChildAdded:Connect(function(child)
+					if flag18 and child:IsA("Model") and child.Name:find("ThunderSpear") then
+						task.delay(0.1, func67)
+					end
+				end)
+			end
+		end
+	end)
+
+	function func69()
+		func66()
+		local flag1 = true
+
+		while flag do
+			if flag then
+				if (flag4 or flag10) and not flag5 then
+					if func9() and func11() then
+						func21()
+					else
+						local v1 = flag4 and func13()
+
+						if v1 then
+							local ok, result = pcall(function()
+								local v1 = func8()
+
+								if not v1 then
+									return false
+								end
+
+								local flag = false
+
+								for _, descendant in ipairs(v1:GetDescendants()) do
+									if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+										flag = true
+										if not descendant:GetAttribute("Broken") then
+											return false
+										end
+									end
+								end
+
+								return flag
+							end)
+							if ok then
+								v1 = result
+							else
+								v1 = false
+							end
+						end
+
+						if v1 then
+							func21()
+						end
+					end
+				end
+				if flag then
+					if flag10 and not flag11 and func13() then
+						if func20() then
+							task.spawn(func22)
+							while flag11 do
+								task.wait(0.2)
+							end
+						end
+					end
+					if flag then
+						if not func23() then
+							task.wait(0.1)
+							continue
+						end
+
+						if not v14 or not func27(v14) then
+							v14 = func9() and func60() or func59()
+						end
+
+						if flag21 then
+							local v2 = func24()
+							local tbl = {}
+							local tbl1
+							local v3 = v14 and v14.PrimaryPart and v14.PrimaryPart.Position
+
+							for _, v4 in ipairs(v2) do
+								local flag2
+
+								if not v4 or not v4.Parent then
+									flag2 = false
+								else
+									local Titans = Workspace:FindFirstChild("Titans")
+									if not Titans then
+										flag2 = false
+									elseif v4.Parent ~= Titans then
+										flag2 = false
+									else
+										flag2 = not func26(v4)
+									end
+								end
+
+								if flag2 then
+									local Hitboxes = v4:FindFirstChild("Hitboxes")
+									local v5
+
+									if not Hitboxes then
+										v5 = nil
+									else
+										local Hit = Hitboxes:FindFirstChild("Hit")
+										if not Hit then
+											v5 = nil
+										else
+											v5 = Hit:FindFirstChild("Nape")
+										end
+									end
+
+									if v5 then
+										if v4 == v14 then
+											tbl1 = {nape = v5, titan = v4}
+										else
+											local num = 0
+
+											if v3 and v4.PrimaryPart then
+												num = (v4.PrimaryPart.Position - v3).Magnitude
+											end
+
+											table.insert(tbl, {nape = v5, titan = v4, dist = num})
+										end
+									end
+								end
+							end
+
+							table.sort(tbl, function(a, b)
+								return a.dist < b.dist
+							end)
+
+							if not tbl1 and #tbl > 0 then
+								local v6 = table.remove(tbl, 1)
+								v14 = v6.titan
+								tbl1 = v6
+							end
+
+							local tbl2 = {}
+
+							for _, v7 in ipairs(tbl) do
+								table.insert(tbl2, v7)
+							end
+
+							if tbl1 then
+								table.insert(tbl2, tbl1)
+							end
+
+							if #tbl2 == 0 then
+								v14 = nil
+								task.wait(0.2)
+							else
+								local num1 = tonumber(#tbl2)
+
+								for i = 1, num1, 8 do
+									if func23() and flag and flag21 then
+										local v8 = func8()
+										local flag3
+
+										if not v8 then
+											flag3 = false
+										else
+											local LeftLowerArm = v8:FindFirstChild("LeftLowerArm")
+											local RightLowerArm = v8:FindFirstChild("RightLowerArm")
+											flag3 = LeftLowerArm and LeftLowerArm:FindFirstChild("Spears") ~= nil or RightLowerArm and RightLowerArm:FindFirstChild("Spears") ~= nil or false
+										end
+
+										if flag3 then
+											if (flag4 or flag10) and not flag5 and func11() then
+												func21()
+												if func11() then
+													break
+												end
+											end
+										else
+											local flag6
+
+											if func9() then
+												flag6 = false
+											else
+												local v9 = func8()
+												if not v9 then
+													flag6 = false
+												else
+													local v10, v11, v12 = ipairs(v9:GetDescendants())
+													flag6 = false
+
+													for _, v13 in v10, v11, v12 do
+														if v13:IsA("MeshPart") and v13.Name:sub(1, 5) == "Blade" then
+															flag6 = true
+															break
+														end
+													end
+												end
+											end
+
+											if flag6 then
+												local v15 = flag4 and not flag5
+
+												if v15 then
+													local ok1, result1 = pcall(function()
+														local v1 = func8()
+
+														if not v1 then
+															return false
+														end
+
+														local flag = false
+
+														for _, descendant in ipairs(v1:GetDescendants()) do
+															if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+																flag = true
+																if not descendant:GetAttribute("Broken") then
+																	return false
+																end
+															end
+														end
+
+														return flag
+													end)
+													if ok1 then
+														v15 = result1
+													else
+														v15 = false
+													end
+												end
+
+												if v15 then
+													func21()
+
+													local ok2, result2 = pcall(function()
+														local v1 = func8()
+
+														if not v1 then
+															return false
+														end
+
+														local flag = false
+
+														for _, descendant in ipairs(v1:GetDescendants()) do
+															if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+																flag = true
+																if not descendant:GetAttribute("Broken") then
+																	return false
+																end
+															end
+														end
+
+														return flag
+													end)
+
+													local v16
+
+													if ok2 then
+														v16 = result2
+													else
+														v16 = false
+													end
+
+													if v16 then
+														break
+													end
+												end
+											end
+										end
+
+										local tbl3 = {}
+										local v17 = math.min(i + 8 - 1, #tbl2)
+
+										for i1 = i, v17 do
+											local v18 = tbl2[i1]
+											local titan = v18.titan
+
+											if titan then
+												local titan1 = v18.titan
+												if not titan1 or not titan1.Parent then
+													titan = false
+												else
+													local Titans1 = Workspace:FindFirstChild("Titans")
+													if not Titans1 then
+														titan = false
+													elseif titan1.Parent ~= Titans1 then
+														titan = false
+													else
+														titan = not func26(titan1)
+													end
+												end
+											end
+
+											if titan and v18.nape and v18.nape.Parent then
+												table.insert(tbl3, v18.titan)
+											end
+										end
+
+										if #tbl3 ~= 0 then
+											func65(v14)
+											local v19 = func8()
+											local flag7
+
+											if not v19 then
+												flag7 = false
+											else
+												local LeftLowerArm1 = v19:FindFirstChild("LeftLowerArm")
+												local RightLowerArm1 = v19:FindFirstChild("RightLowerArm")
+												flag7 = LeftLowerArm1 and LeftLowerArm1:FindFirstChild("Spears") ~= nil or RightLowerArm1 and RightLowerArm1:FindFirstChild("Spears") ~= nil or false
+											end
+
+											if flag7 then
+												if func29(tbl3) then
+													local v20 = flag20 and i + 8 <= #tbl2 and math.max(num5, 0.35)
+													task.wait(v20 or 0.35)
+												else
+													task.wait(0.1)
+												end
+											elseif func33(tbl3) then
+												local v21 = flag20 and i + 8 <= #tbl2 and math.max(num5, 0.12)
+												task.wait(v21 or 0.12)
+											else
+												task.wait(0.08)
+											end
+										end
+
+										continue
+									end
+									break
+								end
+
+								task.wait(0.1)
+							end
+
+							continue
+						end
+
+						if not v14 or not func27(v14) then
+							task.wait(0.2)
+							continue
+						end
+
+						if not func23() then
+							task.wait(0.1)
+							continue
+						end
+
+						func65(v14)
+
+						if flag then
+							if func9() then
+								local v22 = func60(v14) or v14
+								local Hitboxes1 = v22:FindFirstChild("Hitboxes")
+								local v23
+
+								if not Hitboxes1 then
+									v23 = nil
+								else
+									local Hit1 = Hitboxes1:FindFirstChild("Hit")
+									if not Hit1 then
+										v23 = nil
+									else
+										v23 = Hit1:FindFirstChild("Nape")
+									end
+								end
+
+								if v23 and func23() then
+									func29(v22)
+								end
+
+								local v24 = os.clock()
+								local v25 = flag20 and math.max(num5, 0.45) or 0.5
+
+								while flag and not flag21 and os.clock() - v24 < v25 do
+									task.wait(0.04)
+									local flag8
+
+									if not v22 or not v22.Parent then
+										flag8 = false
+									else
+										local Titans2 = Workspace:FindFirstChild("Titans")
+										if not Titans2 then
+											flag8 = false
+										elseif v22.Parent ~= Titans2 then
+											flag8 = false
+										else
+											flag8 = not func26(v22)
+										end
+									end
+
+									if not flag8 then
+										break
+									end
+								end
+
+								if flag then
+									local flag9
+
+									if not v22 or not v22.Parent then
+										flag9 = false
+									else
+										local Titans3 = Workspace:FindFirstChild("Titans")
+										if not Titans3 then
+											flag9 = false
+										elseif v22.Parent ~= Titans3 then
+											flag9 = false
+										else
+											flag9 = not func26(v22)
+										end
+									end
+
+									if not flag9 then
+										if v22 == v14 then
+											v14 = nil
+										end
+
+										if flag20 and not flag1 then
+											task.wait(num5)
+										end
+
+										flag1 = false
+									end
+
+									continue
+								end
+							else
+								local v26 = func59(v14)
+								v26 = v26 or v14
+
+								while flag and not flag21 do
+									task.wait(0.06)
+
+									if flag then
+										local v27 = flag4 and not flag5
+
+										if v27 then
+											if func9() then
+												v27 = false
+											else
+												local v28 = func8()
+												if not v28 then
+													v27 = false
+												else
+													local v29, v30, v31 = ipairs(v28:GetDescendants())
+													v27 = false
+
+													for _, v32 in v29, v30, v31 do
+														if v32:IsA("MeshPart") and v32.Name:sub(1, 5) == "Blade" then
+															v27 = true
+															break
+														end
+													end
+												end
+											end
+										end
+
+										if v27 then
+											local ok3, result3 = pcall(function()
+												local v1 = func8()
+
+												if not v1 then
+													return false
+												end
+
+												local flag = false
+
+												for _, descendant in ipairs(v1:GetDescendants()) do
+													if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+														flag = true
+														if not descendant:GetAttribute("Broken") then
+															return false
+														end
+													end
+												end
+
+												return flag
+											end)
+											if ok3 then
+												v27 = result3
+											else
+												v27 = false
+											end
+										end
+
+										if v27 then
+											func21()
+										end
+
+										local v33 = flag10 and not flag11
+
+										if v33 then
+											if func9() then
+												v33 = false
+											else
+												local v34 = func8()
+												if not v34 then
+													v33 = false
+												else
+													local v35, v36, v37 = ipairs(v34:GetDescendants())
+													v33 = false
+
+													for _, v38 in v35, v36, v37 do
+														if v38:IsA("MeshPart") and v38.Name:sub(1, 5) == "Blade" then
+															v33 = true
+															break
+														end
+													end
+												end
+											end
+										end
+
+										if v33 and func20() then
+											task.spawn(func22)
+											while flag11 do
+												task.wait(0.2)
+											end
+										end
+
+										if flag then
+											if not func23() then
+												continue
+											end
+
+											local v39 = v14
+											local flag12
+
+											if not v39 or not v39.Parent then
+												flag12 = false
+											else
+												local Titans4 = Workspace:FindFirstChild("Titans")
+												if not Titans4 then
+													flag12 = false
+												elseif v39.Parent ~= Titans4 then
+													flag12 = false
+												else
+													flag12 = not func26(v39)
+												end
+											end
+
+											if not flag12 then
+												v14 = func59(v14)
+												if not v14 then
+													break
+												end
+											end
+
+											local v40 = not v26
+
+											if not v40 then
+												local v41 = v26
+												local flag13
+
+												if not v41 or not v41.Parent then
+													flag13 = false
+												else
+													local Titans5 = Workspace:FindFirstChild("Titans")
+													if not Titans5 then
+														flag13 = false
+													elseif v41.Parent ~= Titans5 then
+														flag13 = false
+													else
+														flag13 = not func26(v41)
+													end
+												end
+
+												v40 = not flag13
+											end
+
+											if v40 then
+												if flag20 and not flag1 then
+													task.wait(num5)
+												end
+
+												flag1 = false
+												v26 = func59(v14) or v14
+											elseif v26 == v14 then
+												local v42 = func59(v14)
+												if v42 then
+													v26 = v42
+												end
+											end
+
+											local v43 = not v26
+
+											if not v43 then
+												local v44 = v26
+												local flag14
+
+												if not v44 or not v44.Parent then
+													flag14 = false
+												else
+													local Titans6 = Workspace:FindFirstChild("Titans")
+													if not Titans6 then
+														flag14 = false
+													elseif v44.Parent ~= Titans6 then
+														flag14 = false
+													else
+														flag14 = not func26(v44)
+													end
+												end
+
+												v43 = not flag14
+											end
+
+											if not v43 then
+												local Hitboxes2 = v26:FindFirstChild("Hitboxes")
+												local v45
+
+												if not Hitboxes2 then
+													v45 = nil
+												else
+													local Hit2 = Hitboxes2:FindFirstChild("Hit")
+													if not Hit2 then
+														v45 = nil
+													else
+														v45 = Hit2:FindFirstChild("Nape")
+													end
+												end
+
+												if v45 and func23() then
+													pcall(function()
+														func33(v26)
+													end)
+
+													local v46 = os.clock()
+
+													while flag and not flag21 and os.clock() - v46 < 0.22 do
+														task.wait(0.03)
+														local v47 = v26
+														local flag15
+
+														if not v47 or not v47.Parent then
+															flag15 = false
+														else
+															local Titans7 = Workspace:FindFirstChild("Titans")
+															if not Titans7 then
+																flag15 = false
+															elseif v47.Parent ~= Titans7 then
+																flag15 = false
+															else
+																flag15 = not func26(v47)
+															end
+														end
+
+														if not flag15 then
+															break
+														end
+													end
+												end
+
+												continue
+											end
+										end
+									end
+
+									break
+								end
+
+								continue
+							end
+						end
+					end
+				end
+			end
+			break
+		end
+
+		func32(true)
+		local v48 = func7()
+		local v49 = v48 and v48:FindFirstChild("Hitbox")
+
+		if v49 and v49:IsA("BasePart") then
+			v49.CanTouch = true
+		end
+
+		func66()
+		v14 = nil
+	end
+
+	task.spawn(function()
+		while true do
+			task.wait(0.2)
+			if flag4 then
+				if not flag then
+					if not (flag5 or flag11) then
+						if func9() then
+							if func11() then
+								func21()
+							end
+						elseif func13() then
+							local ok, result = pcall(function()
+								local v1 = func8()
+
+								if not v1 then
+									return false
+								end
+
+								local flag = false
+
+								for _, descendant in ipairs(v1:GetDescendants()) do
+									if descendant:IsA("MeshPart") and descendant.Name:sub(1, 5) == "Blade" then
+										flag = true
+										if not descendant:GetAttribute("Broken") then
+											return false
+										end
+									end
+								end
+
+								return flag
+							end)
+
+							local v1
+
+							if ok then
+								v1 = result
+							else
+								v1 = false
+							end
+
+							if v1 then
+								func21()
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			if not flag10 or not func13() then
+				v15 = nil
+			elseif not flag then
+				if not flag11 then
+					if func20() then
+						task.spawn(func22)
+					end
+				end
+			end
+		end
+	end)
+
+	local tbl9 = {}
+
+	function func70()
+		for _, v1 in pairs(tbl9) do
+			if v1.highlight and v1.highlight.Parent then
+				v1.highlight:Destroy()
+			end
+			if v1.billboard and v1.billboard.Parent then
+				v1.billboard:Destroy()
+			end
+		end
+		tbl9 = {}
+	end
+
+	local function func71(character)
+		if tbl9[character] then
+			return
+		end
+
+		local v1 = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChildWhichIsA("BasePart") or character.PrimaryPart
+
+		if not v1 then
+			return
+		end
+
+		local selectionBox = Instance.new("SelectionBox")
+		selectionBox.Color3 = Color3.fromRGB(120, 80, 255)
+		selectionBox.LineThickness = 0.07
+		selectionBox.SurfaceTransparency = 0.85
+		selectionBox.SurfaceColor3 = Color3.fromRGB(120, 80, 255)
+		selectionBox.Adornee = character
+		selectionBox.Parent = Workspace.CurrentCamera
+		local billboardGui = Instance.new("BillboardGui")
+		billboardGui.AlwaysOnTop = true
+		billboardGui.Size = UDim2.new(0, 160, 0, 50)
+		billboardGui.StudsOffset = Vector3.new(0, 4, 0)
+		billboardGui.Adornee = v1
+		billboardGui.Parent = Workspace.CurrentCamera
+		local textLabel = Instance.new("TextLabel")
+		textLabel.Size = UDim2.new(1, 0, 0.52, 0)
+		textLabel.BackgroundTransparency = 1
+		textLabel.TextColor3 = Color3.fromRGB(200, 170, 255)
+		textLabel.TextStrokeTransparency = 0.35
+		textLabel.TextStrokeColor3 = Color3.fromRGB(20, 5, 50)
+		textLabel.Font = Enum.Font.GothamBold
+		textLabel.TextSize = 14
+		textLabel.Text = "Titan"
+		textLabel.Parent = billboardGui
+		local textLabel1 = Instance.new("TextLabel")
+		textLabel1.Size = UDim2.new(1, 0, 0.48, 0)
+		textLabel1.Position = UDim2.new(0, 0, 0.52, 0)
+		textLabel1.BackgroundTransparency = 1
+		textLabel1.TextColor3 = Color3.fromRGB(255, 220, 100)
+		textLabel1.TextStrokeTransparency = 0.35
+		textLabel1.TextStrokeColor3 = Color3.fromRGB(20, 5, 50)
+		textLabel1.Font = Enum.Font.GothamBold
+		textLabel1.TextSize = 13
+		textLabel1.Text = "- m"
+		textLabel1.Parent = billboardGui
+		local tbl = {highlight = selectionBox, billboard = billboardGui, distLabel = textLabel1, rootPart = v1}
+		tbl.lastDist = nil
+		tbl9[character] = tbl
+	end
+
+	RunService.Heartbeat:Connect(function()
+		if not flag1 then
+			return
+		end
+
+		local Character = LocalPlayer1.Character
+		local v1 = Character and Character:FindFirstChild("HumanoidRootPart")
+		local Titans = Workspace:FindFirstChild("Titans")
+		local tbl = {}
+
+		if Titans then
+			for _, child in pairs(Titans:GetChildren()) do
+				if child:IsA("Model") then
+					tbl[child] = true
+					if not tbl9[child] then
+						func71(child)
+					end
+				end
+			end
+		end
+
+		local tbl1 = {}
+
+		for k in pairs(tbl9) do
+			if not tbl[k] then
+				table.insert(tbl1, k)
+			end
+		end
+
+		for _, v2 in ipairs(tbl1) do
+			local v3 = tbl9[v2]
+
+			if v3.highlight and v3.highlight.Parent then
+				v3.highlight:Destroy()
+			end
+
+			if v3.billboard and v3.billboard.Parent then
+				v3.billboard:Destroy()
+			end
+
+			tbl9[v2] = nil
+		end
+
+		if v1 then
+			for _, v4 in pairs(tbl9) do
+				if v4.rootPart and v4.rootPart.Parent then
+					local v5 = math.floor((v1.Position - v4.rootPart.Position).Magnitude)
+					if v4.lastDist ~= v5 then
+						v4.lastDist = v5
+						v4.distLabel.Text = v5 .. " m"
+					end
+				end
+			end
+		end
+	end)
+
+	local Window = module:CreateWindow({Title = " Symbiote ", Size = UDim2.new(0, 580, 0, 440)})
+	playerTab = Window:CreateTab("Player")
+	autoFarmTab = Window:CreateTab("Auto Farm")
+	variousTab = Window:CreateTab("Various")
+	statsTab = Window:CreateTab("Stats")
+end
+
+local v8 = (function()
+	local v1 = func("Symbiote_AOTR_Stats.json")
+
+	if not v1 then
+		return nil
+	end
+
+	local ok, result = pcall(function()
+		return HttpService:JSONDecode(v1)
+	end)
+
+	if ok and type(result) == "table" then
+		return result
+	end
+
+	return nil
+end)() or {}
+
+local tbl10 = {
+	Player = {
+		Prestige = tonumber(v8.Player and v8.Player.Prestige) or 0,
+		Level = tonumber(v8.Player and v8.Player.Level) or 1,
+		Gems = tonumber(v8.Player and v8.Player.Gems) or 0,
+		Gold = tonumber(v8.Player and v8.Player.Gold) or 0,
+		Pumpkins = tonumber(v8.Player and v8.Player.Pumpkins) or 0,
+	},
+	LastRound = {
+		TimeTaken = tostring(v8.LastRound and v8.LastRound.TimeTaken or "00:00"),
+		Difficulty = tostring(v8.LastRound and v8.LastRound.Difficulty or "N/A"),
+		TitansKilled = tonumber(v8.LastRound and v8.LastRound.TitansKilled) or 0,
+		DamageDealt = tonumber(v8.LastRound and v8.LastRound.DamageDealt) or 0,
+		Gold = tonumber(v8.LastRound and v8.LastRound.Gold) or 0,
+		Gems = tonumber(v8.LastRound and v8.LastRound.Gems) or 0,
+		Pumpkins = tonumber(v8.LastRound and v8.LastRound.Pumpkins) or 0,
+		BP_XP = tonumber(v8.LastRound and (v8.LastRound.BP_XP or v8.LastRound["BP XP"])) or 0,
+		XP = tonumber(v8.LastRound and v8.LastRound.XP) or 0,
+		Items = v8.LastRound and type(v8.LastRound.Items) == "table" and v8.LastRound.Items or {},
+	},
+	Session = {
+		MissionsCompleted = tonumber(v8.Session and v8.Session.MissionsCompleted) or 0,
+		TotalSeconds = tonumber(v8.Session and v8.Session.TotalSeconds) or 0,
+		FastestSeconds = tonumber(v8.Session and v8.Session.FastestSeconds) or 0,
+		TitansKilled = tonumber(v8.Session and v8.Session.TitansKilled) or 0,
+		DamageDealt = tonumber(v8.Session and v8.Session.DamageDealt) or 0,
+		Gold = tonumber(v8.Session and v8.Session.Gold) or 0,
+		Gems = tonumber(v8.Session and v8.Session.Gems) or 0,
+		Pumpkins = tonumber(v8.Session and v8.Session.Pumpkins) or 0,
+		BP_XP = tonumber(v8.Session and (v8.Session.BP_XP or v8.Session["BP XP"])) or 0,
+		XP = tonumber(v8.Session and v8.Session.XP) or 0,
+		Items = v8.Session and type(v8.Session.Items) == "table" and v8.Session.Items or {},
+		RarityCounts = v8.Session and type(v8.Session.RarityCounts) == "table" and v8.Session.RarityCounts or {Common = 0, Uncommon = 0, Rare = 0, Epic = 0, Legendary = 0, Mythic = 0, Secret = 0},
+	},
+}
+
+local function func72()
+	local ok, result = pcall(function()
+		return HttpService:JSONEncode(tbl10)
+	end)
+	if ok and result then
+		func1("Symbiote_AOTR_Stats.json", result)
+	end
+end
+
+local tbl11 = {Status = "In Progress", Seconds = 0, Difficulty = "N/A"}
+local tbl12 = {Gold = 0, Gems = 0, Pumpkins = 0, BP_XP = 0, XP = 0, Items = {}, Rarities = {}}
+
+local tbl13 = {
+	Common_Perk = true,
+	Uncommon_Perk = true,
+	Rare_Perk = true,
+	Epic_Perk = true,
+	Legendary_Perk = true,
+	Mythic_Perk = true,
+	["Common Perk"] = true,
+	["Uncommon Perk"] = true,
+	["Rare Perk"] = true,
+	["Epic Perk"] = true,
+	["Legendary Perk"] = true,
+	["Mythic Perk"] = true,
+	Gold = true,
+	Gems = true,
+	Pumpkins = true,
+	Pumpkin = true,
+	XP = true,
+	["BP XP"] = true,
+	BP_XP = true,
+	BPXP = true,
+}
+
+local function func73(arg1)
+	if not arg1 or arg1 == "" then
+		return true
+	end
+
+	if tbl13[arg1] then
+		return true
+	end
+
+	if arg1:match("^BP[%s_]?XP") then
+		return true
+	end
+
+	return false
+end
+
+local str = "Playing"
+local flag24 = false
+local v9 = os.clock()
+
+local function func74(arg1)
+	if not arg1 then
+		return "0"
+	end
+
+	local v1 = math.floor(tonumber(arg1) or 0)
+	local v2 = tostring(v1):reverse():gsub("(%d%d%d)", "%1,"):reverse()
+
+	if v2:sub(1, 1) == "," then
+		v2 = v2:sub(2)
+	end
+
+	return v2
+end
+
+local function func75(arg1)
+	local v1 = math.max(0, math.floor(tonumber(arg1) or 0))
+	local v2 = math.floor(v1 / 60)
+	return string.format("%02d:%02d", v2, v1 % 60)
+end
+
+local function func76(arg1, arg2)
+	if not arg2 or arg2 <= 0 then
+		return "00:00"
+	end
+
+	local v1 = math.floor(arg1 / arg2)
+	local v2 = math.max(0, math.floor(v1 / 5) * 5)
+	return string.format("%s - %s", func75(v2), func75(v2 + 5))
+end
+
+local tbl14 = {}
+
+local function func77()
+	if not tbl14.Perks then
+		pcall(function()
+			tbl14.Perks = require(ReplicatedStorage.Modules.Storage.Perks)
+		end)
+	end
+	return tbl14.Perks
+end
+
+local function func78()
+	if not tbl14.Items then
+		pcall(function()
+			tbl14.Items = require(ReplicatedStorage.Modules.Storage.Items)
+		end)
+	end
+	return tbl14.Items
+end
+
+local function func79(arg1)
+	local v1 = func77()
+
+	if type(v1) == "table" then
+		local v2 = string.gsub(arg1, "_", " ")
+		for k, v3 in pairs(v1) do
+			if type(v3) == "table" and (v3[arg1] or v3[v2]) then
+				return k
+			end
+		end
+	end
+
+	return "Rare"
+end
+
+local function func80(arg1)
+	local v1 = func78()
+
+	if type(v1) == "table" then
+		local v2 = string.gsub(arg1, "_", " ")
+
+		if v1[arg1] then
+			return v1[arg1].Rarity
+		end
+
+		if v1[v2] then
+			return v1[v2].Rarity
+		end
+	end
+
+	return nil
+end
+
+local tbl15 = {}
+local Parent = statsTab:AddLabel("PLAYER STATS:").Row.Parent
+
+local function func81()
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(1, -8, 0, 0)
+	frame.AutomaticSize = Enum.AutomaticSize.Y
+	frame.BackgroundColor3 = Color3.fromRGB(24, 22, 34)
+	frame.BackgroundTransparency = 0.2
+	frame.BorderSizePixel = 0
+	frame.Parent = Parent
+	local uICorner = Instance.new("UICorner")
+	uICorner.CornerRadius = UDim.new(0, 6)
+	uICorner.Parent = frame
+	local uIStroke = Instance.new("UIStroke")
+	uIStroke.Color = Color3.fromRGB(48, 40, 70)
+	uIStroke.Thickness = 1
+	uIStroke.Parent = frame
+	local uIPadding = Instance.new("UIPadding")
+	uIPadding.PaddingTop = UDim.new(0, 10)
+	uIPadding.PaddingBottom = UDim.new(0, 10)
+	uIPadding.PaddingLeft = UDim.new(0, 14)
+	uIPadding.PaddingRight = UDim.new(0, 14)
+	uIPadding.Parent = frame
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, 0, 0, 0)
+	textLabel.AutomaticSize = Enum.AutomaticSize.Y
+	textLabel.BackgroundTransparency = 1
+	textLabel.TextColor3 = Color3.fromRGB(225, 220, 240)
+	textLabel.Font = Enum.Font.RobotoMono
+	textLabel.TextSize = 13
+	textLabel.TextXAlignment = Enum.TextXAlignment.Left
+	textLabel.TextYAlignment = Enum.TextYAlignment.Top
+	textLabel.TextWrapped = true
+	textLabel.Parent = frame
+	return textLabel
+end
+
+tbl15.Player = func81()
+statsTab:AddLabel("MISSION STATS (LIVE):")
+tbl15.LiveMission = func81()
+statsTab:AddLabel("LAST ROUND STATS:")
+tbl15.LastRound = func81()
+statsTab:AddLabel("TOTAL SESSION STATS:")
+tbl15.Session = func81()
+
+local function func82()
+	tbl15.Player.Text = string.format(
+		"Prestige: %s\nLevel: %s\nGems: %s\nGold: %s\nPumpkins: %s",
+		func74(tbl10.Player.Prestige),
+		func74(tbl10.Player.Level),
+		func74(tbl10.Player.Gems),
+		func74(tbl10.Player.Gold),
+		(func74(tbl10.Player.Pumpkins or 0))
+	)
+
+	tbl15.LiveMission.Text = string.format("Status: %s\nTime: %s\nDifficulty: %s", tbl11.Status, func75(tbl11.Seconds), tbl11.Difficulty)
+	local LastRound = tbl10.LastRound
+	local v1 = LastRound.Items and #LastRound.Items or 0
+
+	local tbl = {
+		"Time Taken: " .. tostring(LastRound.TimeTaken),
+		"Difficulty: " .. tostring(LastRound.Difficulty),
+		"Titans Killed: " .. func74(LastRound.TitansKilled or 0),
+		"Damage Dealt: " .. func74(LastRound.DamageDealt or 0),
+		"Gold: " .. func74(LastRound.Gold),
+		"Gems: " .. func74(LastRound.Gems),
+		"Pumpkins: " .. func74(LastRound.Pumpkins or 0),
+		"BP XP: " .. func74(LastRound.BP_XP or 0),
+		"XP: " .. func74(LastRound.XP),
+		"Drops (" .. tostring(v1) .. "):",
+	}
+
+	if v1 > 0 then
+		for _, item in ipairs(LastRound.Items) do
+			table.insert(tbl, "  " .. item)
+		end
+	else
+		table.insert(tbl, "  None")
+	end
+
+	tbl15.LastRound.Text = table.concat(tbl, "\n")
+	local Session = tbl10.Session
+	local v2 = Session.MissionsCompleted or 0
+	local v3 = Session.FastestSeconds and Session.FastestSeconds > 0 and func75(Session.FastestSeconds) or "00:00"
+	local v4 = func76(Session.TotalSeconds or 0, v2)
+	local v5 = Session.RarityCounts or {}
+
+	local tbl1 = {
+		string.format(
+			"Common: %s | Uncommon: %s | Rare: %s",
+			func74(v5.Common or 0),
+			func74(v5.Uncommon or 0),
+			(func74(v5.Rare or 0))
+		),
+		string.format(
+			"Epic: %s | Legendary: %s | Mythic: %s",
+			func74(v5.Epic or 0),
+			func74(v5.Legendary or 0),
+			(func74(v5.Mythic or 0))
+		),
+	}
+
+	if (v5.Secret or 0) > 0 then
+		table.insert(tbl1, string.format("Secret: %s", (func74(v5.Secret))))
+	end
+
+	local v6 = "Missions Completed: " .. func74(v2)
+	local v7 = "Fastest Time: " .. v3
+	local v8 = "Average Time: " .. v4
+	local v9 = "Titans Killed: " .. func74(Session.TitansKilled or 0)
+	local v10 = "Damage Dealt: " .. func74(Session.DamageDealt or 0)
+	local v11 = "Gold: " .. func74(Session.Gold or 0)
+	local v12 = "Gems: " .. func74(Session.Gems or 0)
+	local v13 = "Pumpkins: " .. func74(Session.Pumpkins or 0)
+	local v14 = "BP XP: " .. func74(Session.BP_XP or 0)
+	local v15 = "XP: " .. func74(Session.XP or 0)
+	local v16 = "Total Drops: " .. tostring(#(Session.Items or {}))
+	local v17 = "Rarity Breakdown:\n  " .. table.concat(tbl1, "\n  ")
+	tbl15.Session.Text = table.concat({v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17}, "\n")
+end
+
+local function func83(arg1)
+	if type(arg1) ~= "table" then
+		return false
+	end
+
+	local flag = false
+
+	if type(arg1.Progression) == "table" then
+		if arg1.Progression.Prestige ~= nil then
+			tbl10.Player.Prestige = tonumber(arg1.Progression.Prestige) or tbl10.Player.Prestige
+			flag = true
+		end
+		if arg1.Progression.Level ~= nil then
+			tbl10.Player.Level = tonumber(arg1.Progression.Level) or tbl10.Player.Level
+			flag = true
+		end
+	end
+
+	if type(arg1.Currency) == "table" then
+		if arg1.Currency.Gold ~= nil then
+			tbl10.Player.Gold = tonumber(arg1.Currency.Gold) or tbl10.Player.Gold
+			flag = true
+		end
+
+		if arg1.Currency.Gems ~= nil then
+			tbl10.Player.Gems = tonumber(arg1.Currency.Gems) or tbl10.Player.Gems
+			flag = true
+		end
+
+		if arg1.Currency.Pumpkins ~= nil then
+			tbl10.Player.Pumpkins = tonumber(arg1.Currency.Pumpkins) or tbl10.Player.Pumpkins
+			flag = true
+		end
+	end
+
+	return flag
+end
+
+local function func84()
+	local flag = false
+	local v1 = game.PlaceId == 14916516914 or game.PlaceId == 13379208636
+	local prestige = LocalPlayer1:GetAttribute("Prestige")
+
+	if prestige ~= nil then
+		tbl10.Player.Prestige = tonumber(prestige) or tbl10.Player.Prestige
+		flag = true
+	end
+
+	local level = LocalPlayer1:GetAttribute("Level")
+
+	if level ~= nil then
+		tbl10.Player.Level = tonumber(level) or tbl10.Player.Level
+		flag = true
+	end
+
+	if v1 then
+		local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+		local v2 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+		local v3 = v2 and v2:FindFirstChild("Topbar")
+
+		if v3 and v3:FindFirstChild("Main") and v3.Main:FindFirstChild("Currencies") then
+			local Currencies = v3.Main.Currencies
+			local v4 = Currencies:FindFirstChild("Gold") and Currencies.Gold:FindFirstChild("Amount")
+			local v5 = Currencies:FindFirstChild("Gems") and Currencies.Gems:FindFirstChild("Amount")
+			local v6 = Currencies:FindFirstChild("Pumpkins") and Currencies.Pumpkins:FindFirstChild("Amount")
+
+			if v4 and v4:IsA("TextLabel") then
+				local num = tonumber((v4.Text:gsub(",", ""):gsub("%s", "")))
+				if num then
+					tbl10.Player.Gold = num
+					flag = true
+				end
+			end
+
+			if v5 and v5:IsA("TextLabel") then
+				local num1 = tonumber((v5.Text:gsub(",", ""):gsub("%s", "")))
+				if num1 then
+					tbl10.Player.Gems = num1
+					flag = true
+				end
+			end
+
+			if v6 and v6:IsA("TextLabel") then
+				local num2 = tonumber((v6.Text:gsub(",", ""):gsub("%s", "")))
+				if num2 then
+					tbl10.Player.Pumpkins = num2
+					flag = true
+				end
+			end
+		end
+	else
+		local ok, _, result = pcall(function()
+			return v21:InvokeServer("S_Rewards", "Get")
+		end)
+		if ok and func83(result) then
+			flag = true
+		end
+	end
+
+	if flag then
+		func72()
+	end
+
+	func82()
+end
+
+local function func85()
+	if str == "Ended" or flag24 then
+		return
+	end
+
+	flag24 = true
+	str = "Ended"
+	task.wait(0.6)
+	tbl11.Status = "Completed"
+	local num = tonumber(Workspace:GetAttribute("Seconds"))
+
+	if not num or num <= 0 then
+		num = math.max(1, tbl11.Seconds)
+	end
+
+	local difficulty = Workspace:GetAttribute("Difficulty")
+
+	if not difficulty or tostring(difficulty) == "" or tostring(difficulty) == "N/A" then
+		if tbl11.Difficulty and tbl11.Difficulty ~= "N/A" then
+			difficulty = tbl11.Difficulty
+		elseif tbl10.LastRound.Difficulty and tbl10.LastRound.Difficulty ~= "N/A" then
+			difficulty = tbl10.LastRound.Difficulty
+		else
+			difficulty = "Easy"
+		end
+	end
+
+	local str1 = tostring(difficulty)
+	local num1 = 0
+	local num2 = 0
+	local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+	local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+	local v2 = v1 and v1:FindFirstChild("Rewards")
+	local Items
+
+	if v2 and v2:FindFirstChild("Main") and v2.Main:FindFirstChild("Info") then
+		local Main = v2.Main.Info.Main
+		local Stats = Main:FindFirstChild("Stats")
+
+		if Stats then
+			local v3 = Stats:FindFirstChild("Time_Taken") and Stats.Time_Taken:FindFirstChild("Amount")
+
+			if v3 and v3:IsA("TextLabel") and v3.Text ~= "" and v3.Text ~= "00:00" then
+				local v4, v5 = string.match(v3.Text, "(%d+):(%d+)")
+				if v4 and v5 then
+					local v6 = (tonumber(v4) or 0) * 60 + (tonumber(v5) or 0)
+					if v6 > 0 then
+						num = v6
+					end
+				end
+			end
+
+			local v7 = Stats:FindFirstChild("Kills") and Stats.Kills:FindFirstChild("Amount")
+
+			if v7 and v7:IsA("TextLabel") then
+				local v8 = v7.Text:gsub(",", ""):gsub("%s", "")
+				num1 = tonumber(v8) or 0
+			end
+
+			local v9 = Stats:FindFirstChild("Damage") and Stats.Damage:FindFirstChild("Amount")
+
+			if v9 and v9:IsA("TextLabel") then
+				local v10 = v9.Text:gsub(",", ""):gsub("%s", "")
+				num2 = tonumber(v10) or 0
+			end
+		end
+
+		Items = Main:FindFirstChild("Items")
+	end
+
+	local Gold = tbl12.Gold
+	local Gems = tbl12.Gems
+	local v11 = tbl12.Pumpkins or 0
+	local v12 = tbl12.BP_XP or 0
+	local XP = tbl12.XP
+	local tbl = {}
+	local v13 = tbl
+	local tbl1 = {}
+
+	local ok, result, result1 = pcall(function()
+		return v21:InvokeServer("S_Rewards", "Get")
+	end)
+
+	local flag = false
+
+	if ok and type(result) == "table" then
+		if result.Seconds and tonumber(result.Seconds) and tonumber(result.Seconds) > 0 then
+			num = tonumber(result.Seconds)
+		end
+
+		if result.Stats and type(result.Stats) == "table" then
+			if tonumber(result.Stats.Kills) and tonumber(result.Stats.Kills) > num1 then
+				num1 = tonumber(result.Stats.Kills)
+			end
+			if tonumber(result.Stats.Damage) and tonumber(result.Stats.Damage) > num2 then
+				num2 = tonumber(result.Stats.Damage)
+			end
+		end
+
+		local Obtained = result.Obtained
+
+		if type(Obtained) == "table" then
+			local v14 = tonumber(Obtained.Gold) or 0
+			local v15 = tonumber(Obtained.Gems) or 0
+			local v16 = tonumber(Obtained.Pumpkins) or 0
+			local v17 = tonumber(Obtained["BP XP"] or Obtained.BP_XP or Obtained.BPXP or Obtained.BP) or 0
+			local v18 = tonumber(Obtained.XP) or 0
+
+			if v14 > 0 then
+				Gold = v14
+			end
+
+			if v15 > 0 then
+				Gems = v15
+			end
+
+			if v16 > 0 then
+				v11 = v16
+			end
+
+			if v17 > 0 then
+				v12 = v17
+			end
+
+			if v18 > 0 then
+				XP = v18
+			end
+
+			if type(Obtained.Perks) == "table" then
+				for k, perk in pairs(Obtained.Perks) do
+					local v19 = type(k) == "string" and not tonumber(k) and k or tostring(perk)
+					local v20 = type(perk) == "number" and perk or 1
+					local flag1
+
+					if not v19 or v19 == "" then
+						flag1 = true
+					elseif tbl13[v19] then
+						flag1 = true
+					elseif v19:match("^BP[%s_]?XP") then
+						flag1 = true
+					else
+						flag1 = false
+					end
+
+					if not flag1 then
+						local v22 = func79(v19) or "Common"
+						local v23 = string.gsub(v19, "_", " ") .. (v20 > 1 and " x" .. tostring(v20) or "") .. " (" .. v22 .. ")"
+						table.insert(tbl, v23)
+						table.insert(tbl1, v22)
+					end
+				end
+			end
+
+			if type(Obtained.Drops) == "table" then
+				for k1, drop in pairs(Obtained.Drops) do
+					local v24 = type(k1) == "string" and not tonumber(k1) and k1 or tostring(drop)
+					local v25 = type(drop) == "number" and drop or 1
+					local flag2
+
+					if not v24 or v24 == "" then
+						flag2 = true
+					elseif tbl13[v24] then
+						flag2 = true
+					elseif v24:match("^BP[%s_]?XP") then
+						flag2 = true
+					else
+						flag2 = false
+					end
+
+					if not flag2 and v24 ~= "Pumpkins" and v24 ~= "Pumpkin" then
+						local v26 = func80(v24) or "Common"
+						local v27 = string.gsub(v24, "_", " ") .. (v25 > 1 and " x" .. tostring(v25) or "") .. " (" .. v26 .. ")"
+						table.insert(tbl, v27)
+						table.insert(tbl1, v26)
+					end
+				end
+			end
+
+			if type(Obtained.Chests) == "table" then
+				for k2, chest in pairs(Obtained.Chests) do
+					local v28 = type(k2) == "string" and not tonumber(k2) and k2 or tostring(chest)
+					local v29 = type(chest) == "number" and chest or 1
+					local flag3
+
+					if not v28 or v28 == "" then
+						flag3 = true
+					elseif tbl13[v28] then
+						flag3 = true
+					elseif v28:match("^BP[%s_]?XP") then
+						flag3 = true
+					else
+						flag3 = false
+					end
+
+					if not flag3 then
+						local v30 = func80(v28) or "Rare"
+						local v31 = string.gsub(v28, "_", " ") .. (v29 > 1 and " x" .. tostring(v29) or "") .. " (" .. v30 .. ")"
+						table.insert(tbl, v31)
+						table.insert(tbl1, v30)
+					end
+				end
+			end
+
+			if type(Obtained.Cosmetics) == "table" then
+				for k3, cosmetic in pairs(Obtained.Cosmetics) do
+					local v32 = type(k3) == "string" and not tonumber(k3) and k3 or tostring(cosmetic)
+					local v33 = type(cosmetic) == "number" and cosmetic or 1
+					local flag4
+
+					if not v32 or v32 == "" then
+						flag4 = true
+					elseif tbl13[v32] then
+						flag4 = true
+					elseif v32:match("^BP[%s_]?XP") then
+						flag4 = true
+					else
+						flag4 = false
+					end
+
+					if not flag4 then
+						local v34 = func80(v32) or "Common"
+						local v35 = string.gsub(v32, "_", " ") .. (v33 > 1 and " x" .. tostring(v33) or "") .. " (" .. v34 .. ")"
+						table.insert(tbl, v35)
+						table.insert(tbl1, v34)
+					end
+				end
+			end
+
+			flag = true
+		end
+	end
+
+	if (not flag or #tbl == 0) and #tbl12.Items > 0 then
+		v13 = table.clone(tbl12.Items)
+		tbl1 = table.clone(tbl12.Rarities)
+
+		if tbl12.Gold > 0 then
+			Gold = tbl12.Gold
+		end
+
+		if tbl12.Gems > 0 then
+			Gems = tbl12.Gems
+		end
+
+		if (tbl12.Pumpkins or 0) > 0 then
+			v11 = tbl12.Pumpkins
+		end
+
+		if (tbl12.BP_XP or 0) > 0 then
+			v12 = tbl12.BP_XP
+		end
+
+		if tbl12.XP > 0 then
+			XP = tbl12.XP
+		end
+	elseif (not flag or #tbl == 0) and Items then
+		for _, child in ipairs(Items:GetChildren()) do
+			if child:IsA("Frame") and child:FindFirstChild("Main") and child.Main:FindFirstChild("Inner") then
+				local Inner = child.Main.Inner
+				local Quantity = Inner:FindFirstChild("Quantity")
+				local v36 = (Quantity and Quantity.Text or ""):gsub(",", ""):gsub("%+", ""):gsub("%s", "")
+				local v37 = tonumber(v36) or 1
+				local Rarity = Inner:FindFirstChild("Rarity")
+				local v38 = Rarity and Rarity.BackgroundColor3
+				local str2 = "Common"
+
+				if not tbl14.Values then
+					pcall(function()
+						tbl14.Values = require(ReplicatedStorage.Modules.Storage.Values)
+					end)
+				end
+
+				local Values = tbl14.Values
+
+				if Values and Values.Colours then
+					for k4, colour in pairs(Values.Colours) do
+						if
+							v38
+							and math.abs(v38.R - colour.R) < 0.05
+							and math.abs(v38.G - colour.G) < 0.05
+							and math.abs(v38.B - colour.B) < 0.05
+						then
+							str2 = k4
+							break
+						end
+					end
+				end
+
+				local Icon = Inner:FindFirstChild("Icon")
+				local v39 = Icon and Icon.Image or ""
+				local v41
+
+				if not tbl14.Items then
+					pcall(function()
+						tbl14.Items = require(ReplicatedStorage.Modules.Storage.Items)
+					end)
+				end
+
+				local Items1 = tbl14.Items
+
+				if Items1 then
+					for k5, v40 in pairs(Items1) do
+						if v40.Image and tostring(v40.Image) ~= "" and v39:find(tostring(v40.Image)) then
+							v41 = k5
+							break
+						end
+					end
+				end
+
+				if not v41 then
+					if not tbl14.Perks then
+						pcall(function()
+							tbl14.Perks = require(ReplicatedStorage.Modules.Storage.Perks)
+						end)
+					end
+
+					local Perks = tbl14.Perks
+
+					if Perks then
+						for _, Perk in pairs(Perks) do
+							if type(Perk) == "table" then
+								for k6, v42 in pairs(Perk) do
+									if
+										type(v42) == "table"
+										and v42.Image
+										and tostring(v42.Image) ~= ""
+										and v39:find(tostring(v42.Image))
+									then
+										v41 = k6
+										break
+									end
+								end
+							end
+							if v41 then
+								break
+							end
+						end
+					end
+				end
+
+				local v43 = v41
+
+				if v41 then
+					local flag5
+
+					if not v41 or v41 == "" then
+						flag5 = true
+					elseif tbl13[v41] then
+						flag5 = true
+					elseif v41:match("^BP[%s_]?XP") then
+						flag5 = true
+					else
+						flag5 = false
+					end
+
+					v43 = not flag5
+				end
+
+				if v43 then
+					local v44 = string.gsub(v41, "_", " ") .. " (" .. str2 .. ")"
+					table.insert(tbl, v44)
+					table.insert(tbl1, str2)
+				elseif v41 then
+					if v41 == "Gold" and Gold == 0 then
+						Gold = v37
+					elseif v41 == "Gems" and Gems == 0 then
+						Gems = v37
+					elseif (v41 == "Pumpkins" or v41 == "Pumpkin") and v11 == 0 then
+						v11 = v37
+					elseif (v41 == "BP XP" or v41 == "BP_XP" or v41 == "BPXP") and v12 == 0 then
+						v12 = v37
+					elseif v41 == "XP" and XP == 0 then
+						XP = v37
+					end
+				end
+			end
+		end
+	end
+
+	local LastRound = tbl10.LastRound
+	LastRound.TimeTaken = func75(num)
+	LastRound.Difficulty = str1
+	LastRound.TitansKilled = num1
+	LastRound.DamageDealt = num2
+	LastRound.Gold = Gold
+	LastRound.Gems = Gems
+	LastRound.Pumpkins = v11
+	LastRound.BP_XP = v12
+	LastRound.XP = XP
+	LastRound.Items = table.clone(v13)
+	local Session = tbl10.Session
+	Session.MissionsCompleted = (Session.MissionsCompleted or 0) + 1
+	Session.TotalSeconds = (Session.TotalSeconds or 0) + num
+
+	if num > 0 then
+		if not Session.FastestSeconds or Session.FastestSeconds == 0 or num < Session.FastestSeconds then
+			Session.FastestSeconds = num
+		end
+	end
+
+	Session.TitansKilled = (Session.TitansKilled or 0) + num1
+	Session.DamageDealt = (Session.DamageDealt or 0) + num2
+	Session.Gold = (Session.Gold or 0) + Gold
+	Session.Gems = (Session.Gems or 0) + Gems
+	Session.Pumpkins = (Session.Pumpkins or 0) + v11
+	Session.BP_XP = (Session.BP_XP or 0) + v12
+	Session.XP = (Session.XP or 0) + XP
+	Session.Items = Session.Items or {}
+
+	for _, v45 in ipairs(v13) do
+		table.insert(Session.Items, v45)
+	end
+
+	Session.RarityCounts = Session.RarityCounts or {}
+
+	for _, v46 in ipairs(tbl1) do
+		Session.RarityCounts[v46] = (Session.RarityCounts[v46] or 0) + 1
+	end
+
+	if ok then
+		func83(result1)
+	end
+
+	func72()
+	func82()
+	flag24 = false
+end
+
+local function func86()
+	if str == "Playing" then
+		return
+	end
+
+	str = "Playing"
+	v9 = os.clock()
+	tbl11.Status = "In Progress"
+	tbl11.Seconds = 0
+	local difficulty = Workspace:GetAttribute("Difficulty")
+
+	if not difficulty or tostring(difficulty) == "" or tostring(difficulty) == "N/A" then
+		difficulty = tbl10.LastRound.Difficulty or "N/A"
+	end
+
+	tbl11.Difficulty = tostring(difficulty)
+	tbl12 = {Gold = 0, Gems = 0, Pumpkins = 0, BP_XP = 0, XP = 0, Items = {}, Rarities = {}}
+	func82()
+end
+
+local function func87()
+	pcall(function()
+		local Modules = ReplicatedStorage:WaitForChild("Modules", 10)
+		local v1 = Modules and Modules:WaitForChild("User Interface", 10)
+		local v2 = v1 and v1:WaitForChild("Rewards", 10)
+
+		if not v2 then
+			return
+		end
+
+		local module = require(v2)
+
+		if type(module) ~= "table" then
+			return
+		end
+
+		if type(module.Create) == "function" and not module.__SymbioteHooked then
+			module.__SymbioteHooked = true
+			local Create = module.Create
+
+			function module:Create(arg2, arg3, arg4, arg5, arg6, arg7)
+				pcall(function()
+					local v1 = tostring(arg7 or ""):gsub(",", ""):gsub("%+", ""):gsub("x", ""):gsub("%s", "")
+					local v2 = tonumber(v1) or 1
+					local str = tostring(arg4 or "")
+
+					if arg3 == 1 or arg4 == "Gold" or str == "Gold" then
+						tbl12.Gold = tbl12.Gold + v2
+					elseif arg4 == "Gems" or str == "Gems" then
+						tbl12.Gems = tbl12.Gems + v2
+					elseif arg4 == "Pumpkins" or str == "Pumpkins" or arg4 == "Pumpkin" or str == "Pumpkin" then
+						tbl12.Pumpkins = (tbl12.Pumpkins or 0) + v2
+					elseif
+						arg4 == "BP XP"
+						or str == "BP XP"
+						or arg4 == "BP_XP"
+						or str == "BP_XP"
+						or arg4 == "BPXP"
+						or str == "BPXP"
+					then
+						tbl12.BP_XP = (tbl12.BP_XP or 0) + v2
+					elseif arg4 == "XP" or str == "XP" then
+						tbl12.XP = tbl12.XP + v2
+					elseif not func73(str) then
+						local v3 = arg5 and arg5 ~= "" and arg5 or func79(str) or func80(str) or "Common"
+						local v4 = string.gsub(str, "_", " ") .. (v2 > 1 and " x" .. tostring(v2) or "") .. " (" .. v3 .. ")"
+						table.insert(tbl12.Items, v4)
+						table.insert(tbl12.Rarities, v3)
+					end
+				end)
+				return Create(self, arg2, arg3, arg4, arg5, arg6, arg7)
+			end
+		end
+
+		if type(module.Setup) == "function" and not module.__SymbioteSetupHooked then
+			module.__SymbioteSetupHooked = true
+			local Setup = module.Setup
+
+			function module.Setup(arg1, arg2)
+				local v1 = Setup(arg1, arg2)
+
+				if str == "Playing" then
+					task.defer(function()
+						func85()
+					end)
+				end
+
+				return v1
+			end
+		end
+	end)
+
+	task.spawn(function()
+		local PlayerGui = LocalPlayer1:WaitForChild("PlayerGui", 60)
+		local v1 = PlayerGui and PlayerGui:WaitForChild("Interface", 60)
+		local v2 = v1 and v1:WaitForChild("Rewards", 60)
+
+		if not v2 then
+			return
+		end
+
+		v2:GetPropertyChangedSignal("Visible"):Connect(function()
+			if v2.Visible then
+				if str == "Playing" then
+					task.delay(0.6, function()
+						func85()
+					end)
+				end
+			elseif str == "Ended" and not flag24 then
+				func86()
+			end
+		end)
+	end)
+
+	Workspace:GetAttributeChangedSignal("Difficulty"):Connect(function()
+		local difficulty = Workspace:GetAttribute("Difficulty")
+		if difficulty and tostring(difficulty) ~= "" and tostring(difficulty) ~= "N/A" then
+			tbl11.Difficulty = tostring(difficulty)
+			func82()
+		end
+	end)
+end
+
+statsTab:AddButton("Reset Session Stats", function()
+	tbl10.Session = {
+		MissionsCompleted = 0,
+		TotalSeconds = 0,
+		FastestSeconds = 0,
+		TitansKilled = 0,
+		DamageDealt = 0,
+		Gold = 0,
+		Gems = 0,
+		Pumpkins = 0,
+		BP_XP = 0,
+		XP = 0,
+		Items = {},
+		RarityCounts = {Common = 0, Uncommon = 0, Rare = 0, Epic = 0, Legendary = 0, Mythic = 0, Secret = 0},
+	}
+
+	func72()
+	func82()
+end)
+
+statsTab:AddButton("Refresh Stats", function()
+	func84()
+end)
+
+task.spawn(function()
+	task.wait(0.3)
+	func84()
+	func87()
+	local v1 = game.PlaceId == 14916516914 or game.PlaceId == 13379208636
+	local num = 0
+
+	if not v1 then
+		str = "Playing"
+		local difficulty = Workspace:GetAttribute("Difficulty")
+
+		if not difficulty or tostring(difficulty) == "" or tostring(difficulty) == "N/A" then
+			difficulty = tbl10.LastRound.Difficulty or "N/A"
+		end
+
+		tbl11.Difficulty = tostring(difficulty)
+	else
+		str = "Lobby"
+	end
+
+	while true do
+		task.wait(0.5)
+		num = num + 0.5
+
+		if v1 then
+			tbl11.Status = "In Lobby"
+			tbl11.Seconds = 0
+			tbl11.Difficulty = "N/A"
+		else
+			local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+			local v2 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+			local v3 = v2 and v2:FindFirstChild("Rewards")
+
+			if v3 and v3.Visible then
+				if str == "Playing" and not flag24 then
+					task.delay(0.6, function()
+						func85()
+					end)
+				end
+			elseif str == "Ended" and not flag24 then
+				func86()
+			elseif str == "Playing" then
+				tbl11.Status = "In Progress"
+				tbl11.Seconds = math.max(0, math.floor(os.clock() - v9))
+				local difficulty1 = Workspace:GetAttribute("Difficulty")
+
+				if difficulty1 and tostring(difficulty1) ~= "" and tostring(difficulty1) ~= "N/A" then
+					tbl11.Difficulty = tostring(difficulty1)
+				elseif
+					tbl11.Difficulty == "N/A"
+					and tbl10.LastRound.Difficulty
+					and tbl10.LastRound.Difficulty ~= "N/A"
+				then
+					tbl11.Difficulty = tbl10.LastRound.Difficulty
+				end
+			end
+		end
+
+		if num >= 15 then
+			num = 0
+			func84()
+		else
+			func82()
+		end
+	end
+end)
+
+tbl5.NoClip = playerTab:AddToggle("NoClip", function(arg1)
+	func5("NoClip", arg1)
+	if arg1 then
+		func34()
+	else
+		func35()
+	end
+end)
+
+tbl5.WalkSpeed = playerTab:AddToggle("Walk Speed", function(arg1)
+	flag6 = arg1
+	func5("WalkSpeed", arg1)
+
+	if arg1 then
+		func36()
+	else
+		func37()
+	end
+end)
+
+tbl5.WalkSpeedSlider = playerTab:AddSlider("Walk Speed Amount", 1, 5, func4("WalkSpeedAmount"), function(arg1)
+	num1 = arg1
+	func5("WalkSpeedAmount", arg1)
+end)
+
+tbl5.LaggyRun = playerTab:AddToggle("Laggy Run", function(arg1)
+	flag7 = arg1
+	func5("LaggyRun", arg1)
+
+	if arg1 then
+		func38()
+	else
+		func39()
+	end
+end)
+
+tbl5.LaggyRunDistSlider = playerTab:AddSlider("Laggy Run Distance", 1, 10, func4("LaggyRunDistance"), function(arg1)
+	num2 = arg1
+	func5("LaggyRunDistance", arg1)
+end)
+
+tbl5.LaggyRunDelaySlider = playerTab:AddSlider("Laggy Run Delay", 1, 10, func4("LaggyRunDelay"), function(arg1)
+	num3 = arg1
+	func5("LaggyRunDelay", arg1)
+end)
+
+tbl5.CtrlClickTP = playerTab:AddToggle("CTRL + Click to TP", function(arg1)
+	flag8 = arg1
+	func5("CtrlClickTP", arg1)
+
+	if arg1 then
+		func40()
+	else
+		func41()
+	end
+end)
+
+tbl5.InfiniteJump = playerTab:AddToggle("Infinite Jump", function(arg1)
+	flag9 = arg1
+	func5("InfiniteJump", arg1)
+
+	if arg1 then
+		func42()
+	else
+		func43()
+	end
+end)
+
+tbl5.AutoFarm = autoFarmTab:AddToggle("Auto Farm", function(arg1)
+	func5("AutoFarm", arg1)
+	if arg1 then
+		flag = true
+		flag2 = true
+		num = 100
+		func53(100)
+		task.spawn(func69)
+	else
+		flag = false
+		v14 = nil
+		func66()
+	end
+end)
+
+tbl5.HitAll = autoFarmTab:AddToggle("Hit All", function(arg1)
+	flag21 = arg1
+	func5("HitAll", arg1)
+end)
+
+tbl5.DistanceToTitanSlider = autoFarmTab:AddSlider("Distance to Titan", 0, 50, func4("DistanceToTitan"), function(arg1)
+	num6 = arg1
+	func5("DistanceToTitan", arg1)
+end)
+
+tbl5.AutoReload = autoFarmTab:AddToggle("Auto Reload", function(arg1)
+	flag4 = arg1
+	func5("AutoReload", arg1)
+end)
+
+tbl5.DelayToKill = autoFarmTab:AddToggle("Delay To Kill", function(arg1)
+	flag20 = arg1
+	func5("DelayToKill", arg1)
+end)
+
+tbl5.DelayToKillSlider = autoFarmTab:AddSlider("Delay(s)", 0, 300, func4("DelayToKillAmount"), function(arg1)
+	num5 = arg1
+	func5("DelayToKillAmount", arg1)
+end)
+
+tbl5.ExpandNapeHitbox = autoFarmTab:AddToggle("Expand Nape Hitbox", function(arg1)
+	flag2 = arg1
+	func5("ExpandNapeHitbox", arg1)
+
+	if not arg1 then
+		func54()
+	else
+		func53()
+	end
+end)
+
+tbl5.HitboxSizeSlider = autoFarmTab:AddSlider("Hitbox Size", 20, 100, func4("HitboxSize"), function(arg1)
+	num = arg1
+	func5("HitboxSize", arg1)
+
+	if flag2 then
+		func53()
+	end
+end)
+
+tbl5.VisualizeHitbox = autoFarmTab:AddToggle("Visualize Hitbox", function(arg1)
+	flag3 = arg1
+	func5("VisualizeHitbox", arg1)
+
+	if not arg1 then
+		func56()
+	end
+end)
+
+variousTab:AddLabel("VARIOUS")
+
+tbl5.TitanESP = variousTab:AddToggle("Titan ESP", function(arg1)
+	flag1 = arg1
+	func5("TitanESP", arg1)
+
+	if not arg1 then
+		func70()
+	end
+end)
+
+tbl5.ChangeCursor = variousTab:AddToggle("Change Cursor", function(arg1)
+	flag12 = arg1
+	func5("ChangeCursor", arg1)
+
+	if arg1 then
+		func44()
+	else
+		func45()
+	end
+end)
+
+tbl5.AutoRefill = variousTab:AddToggle("Auto Refill", function(arg1)
+	flag10 = arg1
+	func5("AutoRefill", arg1)
+
+	if not arg1 then
+		v15 = nil
+	end
+end)
+
+tbl5.AutoRetry = variousTab:AddToggle("Auto Retry", function(arg1)
+	flag13 = arg1
+	func5("AutoRetry", arg1)
+
+	if arg1 then
+		func47()
+	else
+		func46()
+	end
+end)
+
+tbl5.AutoSkipCutscenes = variousTab:AddToggle("Auto Skip Cutscenes", function(arg1)
+	flag14 = arg1
+	func5("AutoSkipCutscenes", arg1)
+
+	if arg1 then
+		func52()
+	else
+		func51()
+	end
+end)
+
+local tbl16 = {
+	AllFamilies = {},
+	TierMap = {},
+	TiersList = {"Common", "Rare", "Epic", "Legendary", "Mythic", "Secret"},
+}
+
+pcall(function()
+	local Families = require(ReplicatedStorage.Modules.Storage.Families)
+
+	for k, Familie in pairs(Families) do
+		if type(Familie) == "table" then
+			for k1 in pairs(Familie) do
+				table.insert(tbl16.AllFamilies, k1)
+				tbl16.TierMap[k1] = k
+			end
+		end
+	end
+
+	table.sort(tbl16.AllFamilies)
+end)
+
+if #tbl16.AllFamilies == 0 then
+	tbl16.AllFamilies = {
+		"Ackerman",
+		"Arlert",
+		"Azumabito",
+		"Boyega",
+		"Bozado",
+		"Braun",
+		"Braus",
+		"Finger",
+		"Fritz",
+		"Galliard",
+		"Grice",
+		"Helos",
+		"Hume",
+		"Iglehaut",
+		"Inocenio",
+		"Kirstein",
+		"Kruger",
+		"Ksaver",
+		"Leonhart",
+		"Munsell",
+		"Pikale",
+		"Ral",
+		"Reeves",
+		"Reiss",
+		"Shiki",
+		"Smith",
+		"Springer",
+		"Tybur",
+		"Yeager",
+		"Zoe",
+	}
+	for k, v10 in pairs({
+		Legendary = {"Yeager", "Ackerman", "Reiss"},
+		Common = {"Reeves", "Blouse", "Inocenio", "Munsell", "Boyega", "Ral", "Bozado", "Pikale", "Hume", "Iglehaut"},
+		Epic = {"Galliard", "Zoe", "Leonhart", "Tybur", "Ksaver", "Braun", "Finger", "Arlert"},
+		Secret = {"Shiki"},
+		Mythic = {"Helos", "Fritz"},
+		Rare = {"Braus", "Kruger", "Azumabito", "Smith", "Grice", "Springer", "Kirstein"},
+	}) do
+		for _, v11 in ipairs(v10) do
+			tbl16.TierMap[v11] = k
+		end
+	end
+end
+
+local function func88(arg1, arg2)
+	local v1
+
+	pcall(function()
+		local CoreGui = game:GetService("CoreGui")
+		Instance.new("Folder", CoreGui):Destroy()
+		v1 = CoreGui
+	end)
+
+	v1 = v1 or (LocalPlayer1:FindFirstChildOfClass("PlayerGui") or LocalPlayer1:WaitForChild("PlayerGui", 3))
+
+	if not v1 then
+		return
+	end
+
+	local Symbiote_FamilyFoundNotify = v1:FindFirstChild("Symbiote_FamilyFoundNotify")
+
+	if Symbiote_FamilyFoundNotify then
+		Symbiote_FamilyFoundNotify:Destroy()
+	end
+
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "Symbiote_FamilyFoundNotify"
+	screenGui.ResetOnSpawn = false
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	screenGui.Parent = v1
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 280, 0, 52)
+	frame.Position = UDim2.new(0.5, 0, 0.88, 0)
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.BackgroundColor3 = Color3.fromRGB(24, 22, 34)
+	frame.BackgroundTransparency = 1
+	frame.BorderSizePixel = 0
+	frame.Parent = screenGui
+	local uIStroke = Instance.new("UIStroke")
+	uIStroke.Color = Color3.fromRGB(140, 60, 255)
+	uIStroke.Thickness = 1.5
+	uIStroke.Transparency = 1
+	uIStroke.Parent = frame
+	local frame1 = Instance.new("Frame")
+	frame1.Size = UDim2.new(0, 4, 0.65, 0)
+	frame1.Position = UDim2.new(0, 8, 0.5, 0)
+	frame1.AnchorPoint = Vector2.new(0, 0.5)
+	frame1.BackgroundColor3 = Color3.fromRGB(80, 220, 150)
+	frame1.BackgroundTransparency = 1
+	frame1.BorderSizePixel = 0
+	frame1.Parent = frame
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Text = "Family found!"
+	textLabel.Size = UDim2.new(1, -26, 0, 20)
+	textLabel.Position = UDim2.new(0, 22, 0, 7)
+	textLabel.BackgroundTransparency = 1
+	textLabel.TextColor3 = Color3.fromRGB(80, 220, 150)
+	textLabel.TextTransparency = 1
+	textLabel.Font = Enum.Font.GothamBold
+	textLabel.TextSize = 14
+	textLabel.TextXAlignment = Enum.TextXAlignment.Left
+	textLabel.Parent = frame
+	local textLabel1 = Instance.new("TextLabel")
+	textLabel1.Text = string.format("%s (%s)", tostring(arg1), tostring(arg2))
+	textLabel1.Size = UDim2.new(1, -26, 0, 18)
+	textLabel1.Position = UDim2.new(0, 22, 0, 27)
+	textLabel1.BackgroundTransparency = 1
+	textLabel1.TextColor3 = Color3.fromRGB(245, 240, 255)
+	textLabel1.TextTransparency = 1
+	textLabel1.Font = Enum.Font.GothamMedium
+	textLabel1.TextSize = 12
+	textLabel1.TextXAlignment = Enum.TextXAlignment.Left
+	textLabel1.Parent = frame
+	local TweenService = game:GetService("TweenService")
+	local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tbl = {Position = UDim2.new(0.5, 0, 0.84, 0), BackgroundTransparency = 0.1}
+	TweenService:Create(frame, tweenInfo, tbl):Play()
+	TweenService:Create(uIStroke, tweenInfo, {Transparency = 0}):Play()
+	TweenService:Create(frame1, tweenInfo, {BackgroundTransparency = 0}):Play()
+	TweenService:Create(textLabel, tweenInfo, {TextTransparency = 0}):Play()
+	TweenService:Create(textLabel1, tweenInfo, {TextTransparency = 0}):Play()
+
+	task.delay(5, function()
+		if not screenGui or not screenGui.Parent then
+			return
+		end
+
+		local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+		local tween = TweenService:Create(frame, tweenInfo, {Position = UDim2.new(0.5, 0, 0.88, 0), BackgroundTransparency = 1})
+		TweenService:Create(uIStroke, tweenInfo, {Transparency = 1}):Play()
+		TweenService:Create(frame1, tweenInfo, {BackgroundTransparency = 1}):Play()
+		TweenService:Create(textLabel, tweenInfo, {TextTransparency = 1}):Play()
+		TweenService:Create(textLabel1, tweenInfo, {TextTransparency = 1}):Play()
+		tween:Play()
+
+		tween.Completed:Connect(function()
+			if screenGui and screenGui.Parent then
+				screenGui:Destroy()
+			end
+		end)
+	end)
+end
+
+local function func89(arg1, arg2)
+	if type(arg1) ~= "table" or not arg2 then
+		return false
+	end
+
+	if arg1[arg2] == true then
+		return true
+	end
+
+	for k, v1 in pairs(arg1) do
+		if v1 == arg2 or k == arg2 and v1 == true then
+			return true
+		end
+	end
+
+	return false
+end
+
+local v28
+
+local function func90()
+	local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+	local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface") and PlayerGui.Interface:FindFirstChild("Customisation")
+	return v1 and v1:FindFirstChild("Family") or nil
+end
+
+local function func91()
+	if v28 then
+		return
+	end
+	v28 = task.spawn(function()
+		while flag15 do
+			local v1 = func90()
+			local v2 = v1 and v1:FindFirstChild("Pity")
+			local str
+
+			if v2 and v2:IsA("TextLabel") and v2.Text:upper():find("LEGENDARY") then
+				str = "Lucky"
+			else
+				str = "Normal"
+			end
+
+			local ok, result, result1, result2, result3, result4 = pcall(function()
+				return v21:InvokeServer("Family", "Roll", str)
+			end)
+
+			local v4
+			local v3
+			local v7
+			local v8
+			local num = 0
+			local v10
+
+			if ok then
+				if type(result) == "table" and type(result1) == "string" then
+					v3 = result
+					v4 = result1
+					v7 = type(result2) == "table" and result2 or nil
+					v8 = result4
+					local v9 = v3[str] or v3.Normal
+
+					if type(v9) == "table" then
+						num = (tonumber(v9.Amount) or 0) + (tonumber(v9.Free) or 0)
+					end
+
+					if v7 then
+						v10 = v7[str] or v7.Normal
+					end
+				elseif type(result2) == "string" then
+					v4 = result2
+					num = (tonumber(result) or 0) + (tonumber(result1) or 0)
+					v10 = tonumber(result3)
+				end
+			end
+
+			if type(v4) == "string" and v4 ~= "" then
+				local v11 = tbl16.TierMap[v4] or "Common"
+
+				if v6 then
+					pcall(function()
+						local v1 = func7()
+						local v2 = v1 and v1:FindFirstChild("Actor") or v5 and v5()[1]
+
+						if v2 then
+							v2:SetAttribute(
+								"Symbiote_RollSync",
+								HttpService:JSONEncode({Currency = str, Spins = v3, TotalSpins = num, Family = v4, Pity = v7, PityVal = v10, SpinLuck = v8})
+							)
+							v6(v2, [[
+                                pcall(function()
+                                    local p = game:GetService("Players")
+                                    local lp = p.LocalPlayer
+                                    local chars = workspace:FindFirstChild("Characters")
+                                    local c = (chars and chars:FindFirstChild(lp.Name)) or lp.Character
+                                    local act = c and c:FindFirstChild("Actor")
+                                    local raw = act and act:GetAttribute("Symbiote_RollSync")
+                                    if not raw then return end
+                                    local http = game:GetService("HttpService")
+                                    local sync = http:JSONDecode(raw)
+                                    local host = _G.__CachedCustHost
+                                    if type(host) ~= "table"
+                                        or type(rawget(host, "Modules")) ~= "table"
+                                        or not host.Modules.Customisation
+                                    then
+                                        host = nil
+                                        _G.__CachedCustHost = nil
+                                        for _, v in ipairs(getgc(true)) do
+                                            if type(v) == "table"
+                                                and type(rawget(v, "Cache")) == "table"
+                                                and type(rawget(v, "Modules")) == "table"
+                                                and v.Modules.Customisation
+                                            then
+                                                host = v
+                                                _G.__CachedCustHost = v
+                                                break
+                                            end
+                                        end
+                                    end
+                                    if host then
+                                        local custMod = host.Modules.Customisation
+                                        local updMod = host.Modules.Update
+                                        local data, slot = nil, nil
+                                        if updMod and type(updMod.Get_Data) == "function" then
+                                            data, slot = updMod.Get_Data(host, true)
+                                        elseif type(host.Cache) == "table" and type(host.Cache.Data) == "table" then
+                                            data = host.Cache.Data
+                                            slot = data.Slots and data.Current_Slot and data.Slots[data.Current_Slot]
+                                        end
+                                        if type(data) == "table" then
+                                            if type(sync.Spins) == "table" then
+                                                data.Spins = sync.Spins
+                                            end
+                                            if sync.SpinLuck ~= nil then
+                                                data.Spin_Luck = sync.SpinLuck
+                                            end
+                                        end
+                                        if type(slot) == "table" and type(slot.Avatar) == "table" then
+                                            slot.Avatar.Family = sync.Family
+                                            if type(sync.Pity) == "table" then
+                                                slot.Avatar.Pity = sync.Pity
+                                            end
+                                        end
+                                        local pgui = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+                                        local cust = pgui and pgui:FindFirstChild("Interface") and pgui.Interface:FindFirstChild("Customisation")
+                                        local fUI = cust and cust:FindFirstChild("Family")
+                                        if custMod then
+                                            custMod.Spinning = false
+                                            if fUI then
+                                                if custMod.Rates and host.Services and host.Services.W and data then
+                                                    pcall(function()
+                                                        custMod.Rates(host, fUI, host.Services.W, data)
+                                                    end)
+                                                end
+                                                if custMod.Family_Details then
+                                                    pcall(function()
+                                                        custMod.Family_Details(host, fUI, true, false)
+                                                    end)
+                                                end
+                                            end
+                                        end
+                                    end
+                                end)
+                            ]])
+						end
+					end)
+				end
+
+				pcall(function()
+					local v1 = func90()
+					if v1 then
+						local v2 = v1:FindFirstChild("Family") and v1.Family:FindFirstChild("Title")
+
+						if v2 and v2:IsA("TextLabel") then
+							v2.Text = string.upper(v4) .. " (" .. v11 .. ")"
+							v2.Visible = true
+						end
+
+						local v3 = v1:FindFirstChild("Buttons") or v1:FindFirstChild("Buttons_2")
+						local v5 = v3 and v3:FindFirstChild("Roll")
+						local v6 = v5 and v5:FindFirstChild("Title")
+
+						if v6 and v6:IsA("TextLabel") then
+							v6.Text = "ROLL (" .. tostring(num) .. ")"
+						end
+
+						local Pity = v1:FindFirstChild("Pity")
+
+						if Pity and Pity:IsA("TextLabel") and v10 ~= nil then
+							if str == "Lucky" then
+								Pity.Text = "LEGENDARY+ PITY: " .. tostring(v10) .. "/100"
+							else
+								Pity.Text = "EPIC+ PITY: " .. tostring(v10) .. "/400"
+							end
+						end
+					end
+				end)
+
+				if func89(tbl1, v4) or func89(tbl2, v11) then
+					flag15 = false
+					v28 = nil
+					func5("AutoFamilySpin", false)
+
+					if tbl5.AutoFamilySpin then
+						tbl5.AutoFamilySpin:SetState(false)
+					end
+
+					func88(v4, v11)
+					break
+				end
+
+				if num <= 0 then
+					flag15 = false
+					v28 = nil
+					func5("AutoFamilySpin", false)
+
+					if tbl5.AutoFamilySpin then
+						tbl5.AutoFamilySpin:SetState(false)
+					end
+
+					break
+				end
+
+				task.wait(0.1)
+			else
+				task.wait(0.25)
+			end
+		end
+		v28 = nil
+	end)
+end
+
+variousTab:AddLabel("AUTO FAMILY ROLL")
+
+tbl5.AutoFamilySpin = variousTab:AddToggle("Auto Family Spin", function(arg1)
+	flag15 = arg1
+	func5("AutoFamilySpin", arg1)
+
+	if arg1 then
+		func91()
+	end
+end)
+
+tbl5.FamiliesDropdown = variousTab:AddDropdown("Families To Stop", tbl16.AllFamilies, function(arg1)
+	tbl1 = arg1 or {}
+	func5("FamiliesToStop", tbl1)
+end)
+
+tbl5.FamilyTiersDropdown = variousTab:AddDropdown("Family Tiers To Stop", tbl16.TiersList, function(arg1)
+	tbl2 = arg1 or {}
+	func5("FamilyTiersToStop", tbl2)
+end)
+
+local tbl17 = {AllPerks = {}, RarityMap = {}, TiersList = {"Common", "Rare", "Epic", "Legendary", "Mythic"}}
+
+pcall(function()
+	local Perks = require(ReplicatedStorage.Modules.Storage.Perks)
+
+	for k, Perk in pairs(Perks) do
+		if type(Perk) == "table" then
+			for k1 in pairs(Perk) do
+				table.insert(tbl17.AllPerks, k1)
+				tbl17.RarityMap[k1] = k
+			end
+		end
+	end
+
+	table.sort(tbl17.AllPerks)
+end)
+
+if #tbl17.AllPerks == 0 then
+	tbl17.AllPerks = {
+		"Adaptation",
+		"Adrenaline",
+		"Aegis",
+		"Art of War",
+		"Black Flash",
+		"Blessed",
+		"Butcher",
+		"Carnifex",
+		"Courage Catalyst",
+		"Cripple",
+		"Critical Hunter",
+		"Enduring",
+		"Enhanced Metabolism",
+		"Everlasting Flame",
+		"Eviscerate",
+		"Exhumation",
+		"Experimental Shells",
+		"First Aid",
+		"Flame Rhapsody",
+		"Flawed Release",
+		"Focus",
+		"Font of Inspiration",
+		"Font of Vitality",
+		"Forceful",
+		"Fortitude",
+		"Founder's Blessing",
+		"Fully Stocked",
+		"Gear Beginner",
+		"Gear Expert",
+		"Gear Intermediate",
+		"Gear Master",
+		"Hardy",
+		"Heavenly Restriction",
+		"Heightened Vitality",
+		"Hollow",
+		"Immortal",
+		"Indefatigable",
+		"Invincible",
+		"Kengo",
+		"Lightweight",
+		"Lucky",
+		"Luminous",
+		"Mangle",
+		"Maximum Firepower",
+		"Mighty",
+		"Munitions Expert",
+		"Munitions Master",
+		"Mutilate",
+		"Peerless Commander",
+		"Peerless Constitution",
+		"Peerless Focus",
+		"Peerless Strength",
+		"Perfect Form",
+		"Perfect Soul",
+		"Protection",
+		"Reckless Abandon",
+		"Resilient",
+		"Robust",
+		"Safeguard",
+		"Sanctified",
+		"Siphoning",
+		"Sixth Sense",
+		"Solo",
+		"Soulfeed",
+		"Speedy",
+		"Stalwart Durability",
+		"Tatsujin",
+		"Tough",
+		"Trauma Battery",
+		"Tyrant's Stare",
+		"Unbreakable",
+		"Unyielding",
+		"Unparalleled Strength",
+		"Unwavering Belief",
+		"Warchief",
+		"Warrior",
+		"Wind Rhapsody",
+	}
+	for k1, v12 in pairs({
+		Common = {
+			"Cripple",
+			"Enduring",
+			"Enhanced Metabolism",
+			"First Aid",
+			"Fortitude",
+			"Gear Beginner",
+			"Hollow",
+			"Lucky",
+			"Mighty",
+		},
+		Rare = {
+			"Blessed",
+			"Critical Hunter",
+			"Experimental Shells",
+			"Forceful",
+			"Fully Stocked",
+			"Gear Intermediate",
+			"Heightened Vitality",
+			"Lightweight",
+			"Mangle",
+			"Protection",
+			"Tough",
+			"Unyielding",
+		},
+		Epic = {
+			"Adrenaline",
+			"Butcher",
+			"Flawed Release",
+			"Focus",
+			"Gear Expert",
+			"Hardy",
+			"Luminous",
+			"Munitions Expert",
+			"Mutilate",
+			"Peerless Strength",
+			"Reckless Abandon",
+			"Resilient",
+			"Safeguard",
+			"Siphoning",
+			"Solo",
+			"Speedy",
+			"Stalwart Durability",
+			"Trauma Battery",
+			"Unbreakable",
+			"Warrior",
+		},
+		Legendary = {
+			"Aegis",
+			"Carnifex",
+			"Courage Catalyst",
+			"Eviscerate",
+			"Exhumation",
+			"Flame Rhapsody",
+			"Font of Vitality",
+			"Gear Master",
+			"Indefatigable",
+			"Invincible",
+			"Munitions Master",
+			"Peerless Commander",
+			"Peerless Constitution",
+			"Peerless Focus",
+			"Perfect Form",
+			"Perfect Soul",
+			"Robust",
+			"Sanctified",
+			"Sixth Sense",
+			"Tyrant's Stare",
+			"Unparalleled Strength",
+			"Warchief",
+			"Wind Rhapsody",
+		},
+		Mythic = {
+			"Adaptation",
+			"Art of War",
+			"Black Flash",
+			"Everlasting Flame",
+			"Explosive Fortune",
+			"Font of Inspiration",
+			"Founder's Blessing",
+			"Heavenly Restriction",
+			"Immortal",
+			"Kengo",
+			"Maximum Firepower",
+			"Soulfeed",
+			"Tatsujin",
+			"Unwavering Belief",
+		},
+	}) do
+		for _, v13 in ipairs(v12) do
+			tbl17.RarityMap[v13] = k1
+		end
+	end
+end
+
+local function func92()
+	if not flag16 then
+		return
+	end
+
+	local flag = false
+	local tbl = {}
+
+	if v6 then
+		pcall(function()
+			local v1 = func7()
+			local v2 = v1 and v1:FindFirstChild("Actor") or v5 and v5()[1]
+
+			if v2 then
+				v2:SetAttribute("Symbiote_PerkFilter", HttpService:JSONEncode({Tiers = tbl3, Specific = tbl4}))
+
+				v6(v2, [[
+                    local p = game:GetService("Players")
+                    local lp = p.LocalPlayer
+                    local chars = workspace:FindFirstChild("Characters")
+                    local c = (chars and chars:FindFirstChild(lp.Name)) or lp.Character
+                    local act = c and c:FindFirstChild("Actor")
+                    local rs = game:GetService("ReplicatedStorage")
+                    local remoteGET = rs:WaitForChild("Assets"):WaitForChild("Remotes"):WaitForChild("GET")
+                    local perksMod = require(rs.Modules.Storage.Perks)
+                    local rarityMap = {}
+                    for r, list in pairs(perksMod) do
+                        if type(list) == "table" then
+                            for name in pairs(list) do
+                                rarityMap[name] = r
+                            end
+                        end
+                    end
+
+                    local hostObj = _G.__CachedDataHost
+                    if not hostObj or type(hostObj) ~= "table" or type(rawget(hostObj, "Cache")) ~= "table" or type(rawget(hostObj.Cache, "Data")) ~= "table" then
+                        hostObj = nil
+                        for _, v in ipairs(getgc(true)) do
+                            if type(v) == "table" and type(rawget(v, "Cache")) == "table" then
+                                local cache = rawget(v, "Cache")
+                                if type(rawget(cache, "Data")) == "table" then
+                                    hostObj = v
+                                    _G.__CachedDataHost = v
+                                    break
+                                end
+                            end
+                        end
+                    end
+
+                    if hostObj and type(hostObj.Cache) == "table" and type(hostObj.Cache.Data) == "table" then
+                        local data = hostObj.Cache.Data
+                        local currentSlot = data.Current_Slot or 1
+                        local slotData = data.Slots and data.Slots[currentSlot]
+                        if slotData and slotData.Perks and slotData.Perks.Storage then
+                            local equippedIds = {}
+                            for _, eqId in pairs(slotData.Perks.Equipped or {}) do
+                                if eqId and eqId ~= "" then
+                                    equippedIds[eqId] = true
+                                end
+                            end
+
+                            local rawFilter = act and act:GetAttribute("Symbiote_PerkFilter")
+                            local http = game:GetService("HttpService")
+                            local filter = rawFilter and http:JSONDecode(rawFilter) or { Tiers = {}, Specific = {} }
+
+                            local batch = {}
+                            local deletedList = {}
+                            for id, info in pairs(slotData.Perks.Storage) do
+                                local name = info.Name
+                                local rarity = rarityMap[name] or "Common"
+                                local match = (filter.Tiers[rarity] == true) or (filter.Specific[name] == true)
+                                if match and not equippedIds[id] then
+                                    table.insert(batch, tostring(id))
+                                    table.insert(deletedList, tostring(id))
+                                    if #batch >= 25 then
+                                        local res = remoteGET:InvokeServer("S_Equipment", "Delete", "Perk", batch)
+                                        if type(res) == "table" then
+                                            hostObj.Cache.Data = res
+                                            data = res
+                                            slotData = data.Slots and data.Slots[currentSlot]
+                                        end
+                                        batch = {}
+                                    end
+                                end
+                            end
+                            if #batch > 0 then
+                                local res = remoteGET:InvokeServer("S_Equipment", "Delete", "Perk", batch)
+                                if type(res) == "table" then
+                                    hostObj.Cache.Data = res
+                                end
+                            end
+                            if act then
+                                act:SetAttribute("Symbiote_PerkDeleted", http:JSONEncode(deletedList))
+                            end
+                        end
+                    end
+                ]])
+
+				flag = true
+				local symbiote_PerkDeleted = v2:GetAttribute("Symbiote_PerkDeleted")
+
+				if symbiote_PerkDeleted then
+					local v3 = HttpService:JSONDecode(symbiote_PerkDeleted)
+					if type(v3) == "table" then
+						for _, v4 in ipairs(v3) do
+							tbl[v4] = true
+						end
+					end
+				end
+			end
+		end)
+	end
+
+	local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+	local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+	local v2 = v1 and v1:FindFirstChild("Equipment")
+	local v3 = v2 and v2:FindFirstChild("Perk_List")
+	local v4 = v3 and v3:FindFirstChild("Holder")
+	local v7 = v4 and v4:FindFirstChild("Items")
+
+	if v7 then
+		local tbl1 = {}
+		local tbl2 = {}
+
+		for _, child in ipairs(v7:GetChildren()) do
+			if child:IsA("GuiObject") and child.Name ~= "Grid" then
+				local iD = child:GetAttribute("ID")
+				local v8 = child:GetAttribute("Tag") or child.Name
+				local v9 = child:GetAttribute("Rarity") or tbl17.RarityMap[v8] or "Common"
+
+				if iD then
+					local str = tostring(iD)
+					if tbl[str] then
+						child:Destroy()
+					else
+						local v10 = not flag
+
+						if v10 then
+							if not v8 then
+								v10 = false
+							elseif tbl3[v9 or tbl17.RarityMap[v8] or "Common"] == true then
+								v10 = true
+							elseif tbl4[v8] == true then
+								v10 = true
+							else
+								v10 = false
+							end
+						end
+
+						if v10 then
+							table.insert(tbl1, str)
+							table.insert(tbl2, child)
+						end
+					end
+				end
+			end
+		end
+
+		if #tbl1 > 0 then
+			local tbl5 = {}
+
+			for i, v11 in ipairs(tbl1) do
+				table.insert(tbl5, v11)
+				if #tbl5 >= 25 or i == #tbl1 then
+					pcall(function()
+						v21:InvokeServer("S_Equipment", "Delete", "Perk", tbl5)
+					end)
+					tbl5 = {}
+				end
+			end
+
+			for _, v12 in ipairs(tbl2) do
+				if v12 and v12.Parent then
+					v12:Destroy()
+				end
+			end
+		end
+	end
+end
+
+local function func93()
+	if AutoSellPerksThread then
+		return
+	end
+	AutoSellPerksThread = task.spawn(function()
+		while flag16 do
+			func92()
+			task.wait(1.5)
+		end
+		AutoSellPerksThread = nil
+	end)
+end
+
+variousTab:AddLabel("AUTO SELL PERKS")
+
+tbl5.AutoSellPerks = variousTab:AddToggle("Auto Sell Selected Tier Perks", function(arg1)
+	flag16 = arg1
+	func5("AutoSellPerks", arg1)
+
+	if arg1 then
+		func92()
+		func93()
+	end
+end)
+
+tbl5.PerkTiersDropdown = variousTab:AddDropdown("Perk Tiers To Sell", tbl17.TiersList, function(arg1)
+	tbl3 = arg1 or {}
+	func5("PerkTiersToSell", tbl3)
+
+	if flag16 then
+		func92()
+	end
+end)
+
+tbl5.SpecificPerksDropdown = variousTab:AddDropdown("Select Perks To Sell", tbl17.AllPerks, function(arg1)
+	tbl4 = arg1 or {}
+	func5("SpecificPerksToSell", tbl4)
+
+	if flag16 then
+		func92()
+	end
+end)
+
+variousTab:AddLabel("THUNDER SPEARS")
+
+tbl5.AutoCreateTowers = variousTab:AddToggle("Auto Create Towers(Outskirts)", function(arg1)
+	flag17 = arg1
+	func5("AutoCreateTowers", arg1)
+
+	if arg1 then
+		func63()
+		func66()
+	else
+		v16 = nil
+		func66()
+	end
+end)
+
+tbl5.AutoRetrieveSupplyCrates = variousTab:AddToggle("Auto Retrieve Supply Crates(Forest)", function(arg1)
+	flag18 = arg1
+	func5("AutoRetrieveSupplyCrates", arg1)
+
+	if arg1 then
+		func68()
+		task.spawn(func67)
+	else
+		flag19 = false
+	end
+end)
+
+task.spawn(function()
+	local v5
+
+	while true do
+		local PlayerGui = LocalPlayer1:FindFirstChild("PlayerGui")
+		local v1 = PlayerGui and PlayerGui:FindFirstChild("Interface")
+		local v2 = v1 and v1:FindFirstChild("Equipment")
+		local v3 = v2 and v2:FindFirstChild("Perk_List")
+		local v4 = v3 and v3:FindFirstChild("Holder")
+		v5 = v4 and v4:FindFirstChild("Items")
+
+		if v5 then
+			break
+		end
+
+		task.wait(1)
+	end
+
+	v5.ChildAdded:Connect(function(child)
+		if not flag16 then
+			return
+		end
+		task.delay(0.1, function()
+			if not flag16 then
+				return
+			end
+			if child and child:IsA("GuiObject") and child.Name ~= "Grid" then
+				local v1 = child:GetAttribute("Tag") or child.Name
+				local v2 = child:GetAttribute("Rarity") or tbl17.RarityMap[v1] or "Common"
+				local iD = child:GetAttribute("ID")
+				local v3 = tbl3[v2] == true or tbl4[v1] == true
+
+				if iD and v3 then
+					pcall(function()
+						v21:InvokeServer("S_Equipment", "Delete", "Perk", {tostring(iD)})
+					end)
+					if child and child.Parent then
+						child:Destroy()
+					end
+				end
+			end
+		end)
+	end)
+end)
+
+task.spawn(function()
+	num1 = func4("WalkSpeedAmount")
+	num2 = func4("LaggyRunDistance")
+	num3 = func4("LaggyRunDelay")
+	num = func4("HitboxSize")
+	num5 = func4("DelayToKillAmount")
+	num6 = func4("DistanceToTitan")
+
+	if tbl5.WalkSpeedSlider then
+		tbl5.WalkSpeedSlider:SetValue(func4("WalkSpeedAmount"))
+	end
+
+	if tbl5.LaggyRunDistSlider then
+		tbl5.LaggyRunDistSlider:SetValue(func4("LaggyRunDistance"))
+	end
+
+	if tbl5.LaggyRunDelaySlider then
+		tbl5.LaggyRunDelaySlider:SetValue(func4("LaggyRunDelay"))
+	end
+
+	if tbl5.DelayToKillSlider then
+		tbl5.DelayToKillSlider:SetValue(func4("DelayToKillAmount"))
+	end
+
+	if tbl5.DistanceToTitanSlider then
+		tbl5.DistanceToTitanSlider:SetValue(func4("DistanceToTitan"))
+	end
+
+	if tbl5.HitboxSizeSlider then
+		tbl5.HitboxSizeSlider:SetValue(func4("HitboxSize"))
+	end
+
+	local v1 = func4("FamiliesToStop")
+
+	if type(v1) == "table" and tbl5.FamiliesDropdown then
+		tbl1 = v1
+		tbl5.FamiliesDropdown:SetSelected(v1)
+	end
+
+	local v2 = func4("FamilyTiersToStop")
+
+	if type(v2) == "table" and tbl5.FamilyTiersDropdown then
+		tbl2 = v2
+		tbl5.FamilyTiersDropdown:SetSelected(v2)
+	end
+
+	local v3 = func4("PerkTiersToSell")
+
+	if type(v3) == "table" and tbl5.PerkTiersDropdown then
+		tbl3 = v3
+		tbl5.PerkTiersDropdown:SetSelected(v3)
+	end
+
+	local v4 = func4("SpecificPerksToSell")
+
+	if type(v4) == "table" and tbl5.SpecificPerksDropdown then
+		tbl4 = v4
+		tbl5.SpecificPerksDropdown:SetSelected(v4)
+	end
+
+	if func4("ChangeCursor") then
+		flag12 = true
+		func44()
+
+		if tbl5.ChangeCursor then
+			tbl5.ChangeCursor:SetState(true)
+		end
+	end
+
+	if func4("AutoRetry") then
+		flag13 = true
+		func47()
+
+		if tbl5.AutoRetry then
+			tbl5.AutoRetry:SetState(true)
+		end
+	end
+
+	if func4("AutoSkipCutscenes") then
+		flag14 = true
+		func52()
+
+		if tbl5.AutoSkipCutscenes then
+			tbl5.AutoSkipCutscenes:SetState(true)
+		end
+	end
+
+	if func4("AutoFamilySpin") then
+		flag15 = true
+
+		if tbl5.AutoFamilySpin then
+			tbl5.AutoFamilySpin:SetState(true)
+		end
+
+		func91()
+	end
+
+	if func4("AutoSellPerks") then
+		flag16 = true
+
+		if tbl5.AutoSellPerks then
+			tbl5.AutoSellPerks:SetState(true)
+		end
+
+		func92()
+		func93()
+	end
+
+	task.spawn(function()
+		local v1 = LocalPlayer1 or Players1.LocalPlayer
+		local v2 = os.clock()
+		local v3 = Workspace:FindFirstChild("Titans") ~= nil or Workspace:FindFirstChild("Characters") ~= nil
+
+		while os.clock() - v2 < 35 do
+			local Characters = Workspace:FindFirstChild("Characters")
+			local v4 = Characters and Characters:FindFirstChild(LocalPlayer1.Name) or LocalPlayer1.Character
+			local v5 = v4 and v4:FindFirstChild("HumanoidRootPart")
+			local v6 = v4 and v4:FindFirstChild("Humanoid")
+			local v7 = v1 and v1:FindFirstChild("PlayerGui")
+			local v8 = v7 and v7:FindFirstChild("Fullscreen")
+			local v9 = v8 and v8:FindFirstChild("Loading_Screen")
+			local v10 = v7 and v7:FindFirstChild("Interface")
+			local v11 = not v9 or v9.Visible == false
+			local v13
+
+			if v3 then
+				local v12 = v4 and v4:GetAttribute("Setup")
+				v13 = v5 ~= nil and v6 ~= nil and v12 == true
+			else
+				v13 = v5 ~= nil and v6 ~= nil
+			end
+
+			local v14 = v10 == nil or v10.Enabled ~= false
+
+			if v11 and v13 and v14 then
+				break
+			end
+
+			task.wait(0.3)
+		end
+
+		task.wait(0.8)
+
+		if func4("NoClip") then
+			func34()
+			if tbl5.NoClip then
+				tbl5.NoClip:SetState(true)
+			end
+		end
+
+		if func4("WalkSpeed") then
+			flag6 = true
+			func36()
+
+			if tbl5.WalkSpeed then
+				tbl5.WalkSpeed:SetState(true)
+			end
+		end
+
+		if func4("LaggyRun") then
+			flag7 = true
+			func38()
+
+			if tbl5.LaggyRun then
+				tbl5.LaggyRun:SetState(true)
+			end
+		end
+
+		if func4("CtrlClickTP") then
+			flag8 = true
+			func40()
+
+			if tbl5.CtrlClickTP then
+				tbl5.CtrlClickTP:SetState(true)
+			end
+		end
+
+		if func4("InfiniteJump") then
+			flag9 = true
+			func42()
+
+			if tbl5.InfiniteJump then
+				tbl5.InfiniteJump:SetState(true)
+			end
+		end
+
+		if func4("AutoReload") then
+			flag4 = true
+			if tbl5.AutoReload then
+				tbl5.AutoReload:SetState(true)
+			end
+		end
+
+		if func4("DelayToKill") then
+			flag20 = true
+			if tbl5.DelayToKill then
+				tbl5.DelayToKill:SetState(true)
+			end
+		end
+
+		if func4("HitAll") then
+			flag21 = true
+			if tbl5.HitAll then
+				tbl5.HitAll:SetState(true)
+			end
+		end
+
+		if func4("ExpandNapeHitbox") then
+			flag2 = true
+			func53()
+
+			if tbl5.ExpandNapeHitbox then
+				tbl5.ExpandNapeHitbox:SetState(true)
+			end
+		end
+
+		if tbl5.HitboxSizeSlider then
+			tbl5.HitboxSizeSlider:SetValue(func4("HitboxSize"))
+		end
+
+		if func4("VisualizeHitbox") then
+			flag3 = true
+			if tbl5.VisualizeHitbox then
+				tbl5.VisualizeHitbox:SetState(true)
+			end
+		end
+
+		if func4("TitanESP") then
+			flag1 = true
+			if tbl5.TitanESP then
+				tbl5.TitanESP:SetState(true)
+			end
+		end
+
+		if func4("AutoRefill") then
+			flag10 = true
+			if tbl5.AutoRefill then
+				tbl5.AutoRefill:SetState(true)
+			end
+		end
+
+		if func4("AutoCreateTowers") then
+			flag17 = true
+
+			if tbl5.AutoCreateTowers then
+				tbl5.AutoCreateTowers:SetState(true)
+			end
+
+			func63()
+			func66()
+		end
+
+		if func4("AutoRetrieveSupplyCrates") then
+			flag18 = true
+
+			if tbl5.AutoRetrieveSupplyCrates then
+				tbl5.AutoRetrieveSupplyCrates:SetState(true)
+			end
+
+			func68()
+			task.spawn(func67)
+		end
+
+		if func4("AutoFarm") then
+			flag = true
+			flag2 = true
+			num = 100
+			func53(100)
+			task.spawn(func69)
+
+			if tbl5.AutoFarm then
+				tbl5.AutoFarm:SetState(true)
+			end
+
+			if tbl5.ExpandNapeHitbox then
+				tbl5.ExpandNapeHitbox:SetState(true)
+			end
+		end
+	end)
+end)
