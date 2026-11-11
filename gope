@@ -82,6 +82,7 @@ local CFG_RETURN_COUNTER = CFG_FOLDER .. "/return_counter.txt"
 local CFG_BAN_CACHE = CFG_FOLDER .. "/last_ban_status.txt"
 local ConfigFile = CFG_FOLDER .. "/dropdown_config.json"
 local AllStatesFile = CFG_FOLDER .. "/all_states.json"
+local CFG_EXPORT_CONFIG = CFG_FOLDER .. "/export_config.lua"
 local CFG_KEY = CFG_FOLDER .. "/premium_key.txt"
 local CFG_KEYBINDS = CFG_FOLDER .. "/keybinds.txt"
 
@@ -1782,11 +1783,77 @@ function AutoFarm:Start()
 				continue
 			end
 
+			-- Smooth "Hold Last Titan": while the wait timer is running, keep
+			-- (alive - 1) distinct titans alive instead of freezing on the final
+			-- titan. The last titan is only released once the timer expires.
+			local holdNapes = validNapes
+			do
+				local state = getgenv().KiraHub.State
+				if not wavesMode and IsToggled("LastTitanWaitToggle") and mapType == "Missions" then
+					local holdTime = GetOption("LastTitanWaitSlider", 60)
+					local aliveCount = 0
+					if titansFolder then
+						for _, m in ipairs(titansFolder:GetChildren()) do
+							if m:IsA("Model") and KiraTitanAlive(m) then
+								aliveCount = aliveCount + 1
+							end
+						end
+					end
+					if aliveCount <= 0 then
+						state.HoldTitanZeroSince = state.HoldTitanZeroSince or now
+					else
+						if not state.HoldTitanStart
+							or (state.HoldTitanZeroSince and now - state.HoldTitanZeroSince > 20)
+						then
+							state.HoldTitanStart = now
+						end
+						state.HoldTitanZeroSince = nil
+					end
+
+					local safeLeft = 0
+					if state.HoldTitanStart then
+						safeLeft = math.max(0, holdTime - (now - state.HoldTitanStart))
+					end
+					state.HoldSafeLeft = safeLeft
+
+					if safeLeft > 0 then
+						local order, modelMap = {}, {}
+						for _, nape in ipairs(validNapes) do
+							local model = nape
+							while model and model.Parent ~= titansFolder do
+								model = model.Parent
+							end
+							if model then
+								if not modelMap[model] then
+									modelMap[model] = {}
+									order[#order + 1] = model
+								end
+								modelMap[model][#modelMap[model] + 1] = nape
+							end
+						end
+						local keepModels = math.max(0, #order - 1)
+						local kept = {}
+						for i = 1, keepModels do
+							for _, nape in ipairs(modelMap[order[i]]) do
+								kept[#kept + 1] = nape
+							end
+						end
+						holdNapes = kept
+					end
+				else
+					state.HoldTitanStart = nil
+					state.HoldTitanZeroSince = nil
+					state.HoldSafeLeft = 0
+				end
+			end
+
 			-- Smooth "safe time": restart the last-titan timer whenever a fresh
 			-- wave of titans spawns, otherwise the timer is stale across maps.
 			if getgenv().KiraHub.State._sawZeroTitans then
 				getgenv().KiraHub.State._sawZeroTitans = false
 				getgenv().KiraHub.State._missionStartClock = os.clock()
+				getgenv().KiraHub.State.HoldTitanStart = nil
+				getgenv().KiraHub.State.HoldTitanZeroSince = nil
 			end
 
 			-- Smooth "Wait for Boss": do not burn the boss window on adds while
@@ -1853,8 +1920,8 @@ function AutoFarm:Start()
 			local isStall = not wavesMode and mapData and mapData.Map and mapData.Map.Objective == "Stall"
 			local bossIsRoaring = false
 
-			for i = 1, #validNapes do
-				local nape = validNapes[i]
+			for i = 1, #holdNapes do
+				local nape = holdNapes[i]
 				if not nape or not nape.Parent then continue end
 				local titanModel = nape.Parent.Parent.Parent
 				if not KiraTitanAlive(titanModel) then continue end
@@ -1926,14 +1993,6 @@ function AutoFarm:Start()
 			end
 
 			if not getgenv().KiraHub.State._missionStartClock then getgenv().KiraHub.State._missionStartClock = os.clock() end
-
-			if not wavesMode and targetPart and #validNapes == 1 and mapType == "Missions" then
-				local elapsed = os.clock() - getgenv().KiraHub.State._missionStartClock
-				local requiredWait = IsToggled("LastTitanWaitToggle") and GetOption("LastTitanWaitSlider", 60) or 10
-				if elapsed < requiredWait then
-					targetPart = nil
-				end
-			end
 
 			getgenv().KiraHub.State.TargetNape = targetPart
 			if attackTitanFound then
@@ -2534,7 +2593,7 @@ local Tabs = {
 	Upgrades = Window:AddTab("Upgrades", "trending-up"),
 	Waves = Window:AddTab("Waves", "waves-arrow-down"),
 	ThunderSpear = Window:AddTab("TS Quest", "target"),
-	Raids = Window:AddTab("RAIDS", "crosshair"),
+	Raids = Window:AddTab("Raid", "crosshair"),
 	Global = Window:AddTab("Global", "globe"),
 	Market = Window:AddTab("Market", "shopping-cart"),
 	Stats = Window:AddTab("Stats", "activity"),
@@ -2549,6 +2608,47 @@ local function MarkDirty()
 	getgenv().KiraHub.State.Dirty = true
 end
 
+-- ============================================================
+-- Boosted map detection (ported from Smooth Hub)
+-- Reads workspace attributes first, then scans the attributes of workspace,
+-- ReplicatedStorage and the local player for anything containing "boost".
+-- Timers at or below 3 seconds are treated as expired.
+-- ============================================================
+KiraBoostedMaps = {"Shiganshina","Trost","Outskirts","Forest","Utgard","Docks","Stohess","Chapel"}
+
+function KiraGetBoostedMap()
+	local mapName = workspace:GetAttribute("Boosted_Map")
+	local timer = workspace:GetAttribute("Boosted_Timer")
+	if type(mapName) ~= "string" or not table.find(KiraBoostedMaps, mapName) then
+		mapName, timer = nil, nil
+		for _, root in ipairs({workspace, ReplicatedStorage, player}) do
+			local ok, attrs = pcall(function() return root:GetAttributes() end)
+			if ok and type(attrs) == "table" then
+				local foundMap, foundTimer = nil, nil
+				for key, value in pairs(attrs) do
+					local lowered = string.lower(tostring(key))
+					if lowered:find("boost", 1, true) then
+						if type(value) == "string" and table.find(KiraBoostedMaps, value) then
+							foundMap = value
+						elseif type(value) == "number"
+							and (lowered:find("time", 1, true) or lowered:find("left", 1, true))
+						then
+							foundTimer = value
+						end
+					end
+				end
+				if foundMap then
+					mapName, timer = foundMap, foundTimer
+					break
+				end
+			end
+		end
+	end
+	if not mapName then return nil end
+	if type(timer) == "number" and timer <= 3 then return nil end
+	return mapName, (type(timer) == "number") and timer or nil
+end
+
 local function BuildInfoTab(TabRef)
 	local I_Premium = TabRef:AddLeftGroupbox("Premium Status", "crown")
 	I_Premium:AddLabel("PREMIUM v2.9 (Elite Edition)", true)
@@ -2557,7 +2657,11 @@ local function BuildInfoTab(TabRef)
 	I_Premium:AddDivider()
 	I_Premium:AddLabel("Thank you for your support!")
 	I_Premium:AddLabel("If you like the premium kindly buy from Discord")
-	I_Premium:AddLabel("Premium is 100% Safe !")
+	I_Premium:AddDivider()
+	I_Premium:AddLabel("NOT 100% SAFE", true)
+	I_Premium:AddLabel("The game's anti-cheat keeps getting updated.")
+	I_Premium:AddLabel("No script can guarantee full safety.")
+	I_Premium:AddLabel("Using alts is strongly preferred.")
 
 	local I_Soc = TabRef:AddLeftGroupbox("Socials", "share-2")
 	I_Soc:AddButton({Text = "Copy Discord", Func = function()
@@ -2605,6 +2709,13 @@ local function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[*] Legendary+ drop name resolution fixed")
 	I_Upd:AddLabel("[*] Personal execution + mythical logging")
 	I_Upd:AddLabel("[*] Skin Hunter now full rejoin cycle")
+	I_Upd:AddDivider()
+	I_Upd:AddLabel("v2.9 SMOOTH INTEGRATION")
+	I_Upd:AddLabel("[+] Family roller rebuilt (spins, pity, tiers)")
+	I_Upd:AddLabel("[+] Smooth auto-claim suite in Upgrades")
+	I_Upd:AddLabel("[+] Real SELECT slot switching")
+	I_Upd:AddLabel("[+] Freedom difficulty + boosted maps")
+	I_Upd:AddLabel("[+] Hold last titan + config export/import")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -2876,30 +2987,36 @@ local function BuildFarmTab(TabRef)
 		MarkDirty()
 	end)
 
+	local function RefreshBoostedLabel()
+		local labels = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
+		local board = labels and labels.BoostedMap
+		if not board then return end
+		local boostedMap, boostedTimer = KiraGetBoostedMap()
+		local text
+		if boostedMap then
+			local timeText = "N/A"
+			if type(boostedTimer) == "number" then
+				local secs = math.max(0, math.floor(boostedTimer))
+				timeText = string.format("%02d:%02d", math.floor(secs / 60), secs % 60)
+			end
+			text = "Boosted: " .. tostring(boostedMap) .. " | " .. timeText .. " left"
+		else
+			text = "Boosted: None active"
+		end
+		pcall(function() board:SetText(text) end)
+	end
+
 	task.spawn(function()
 		while getgenv().KiraHubAOTR do
-			local labels = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
-			local board = labels and labels.BoostedMap
-			if board then
-				local boostedMap = workspace:GetAttribute("Boosted_Map")
-				local boostedTimer = workspace:GetAttribute("Boosted_Timer")
-				local text
-				if boostedMap and boostedMap ~= "" then
-					local timeText
-					if type(boostedTimer) == "number" then
-						local secs = math.max(0, math.floor(boostedTimer))
-						timeText = string.format("%02d:%02d", math.floor(secs / 60), secs % 60)
-					else
-						timeText = tostring(boostedTimer or "N/A")
-					end
-					text = "Boosted: " .. tostring(boostedMap) .. " | " .. timeText .. " left"
-				else
-					text = "Boosted: None active"
-				end
-				pcall(function() board:SetText(text) end)
-			end
+			pcall(RefreshBoostedLabel)
 			task.wait(1)
 		end
+	end)
+
+	pcall(function()
+		workspace:GetAttributeChangedSignal("Boosted_Map"):Connect(function()
+			pcall(RefreshBoostedLabel)
+		end)
 	end)
 
 	F_Start:AddDropdown("MissionObjectiveDropdown", {
@@ -2911,8 +3028,8 @@ local function BuildFarmTab(TabRef)
 	Options.MissionObjectiveDropdown:OnChanged(function() MarkDirty() end)
 
 	F_Start:AddDropdown("MissionDifficultyDropdown", {
-		Values = {"Easy","Normal","Hard","Severe","Aberrant","Hardest"},
-		Default = 6,
+		Values = {"Easy","Normal","Hard","Severe","Aberrant","Freedom","Hardest"},
+		Default = 7,
 		Multi = false,
 		Text = "Mission Difficulty"
 	})
@@ -2927,8 +3044,8 @@ local function BuildFarmTab(TabRef)
 	Options.RaidMapDropdown:OnChanged(function() MarkDirty() end)
 
 	F_Start:AddDropdown("RaidDifficultyDropdown", {
-		Values = {"Hard","Severe","Aberrant","Hardest"},
-		Default = 4,
+		Values = {"Hard","Severe","Aberrant","Freedom","Hardest"},
+		Default = 5,
 		Multi = false,
 		Text = "Raid Difficulty"
 	})
@@ -3171,17 +3288,25 @@ local function BuildUtilityTab(TabRef)
 	})
 	Options.DieAtStreakSlider:OnChanged(function() MarkDirty() end)
 
-	U_Feat:AddToggle("LastTitanWaitToggle", {Text = "Last Titan Wait", Default = false})
-	Toggles.LastTitanWaitToggle:OnChanged(function() MarkDirty() end)
+	U_Feat:AddToggle("LastTitanWaitToggle", {Text = "Wait for last titan", Default = false})
+	Toggles.LastTitanWaitToggle:OnChanged(function()
+		local st = getgenv().KiraHub.State
+		st.HoldTitanStart = nil
+		st.HoldTitanZeroSince = nil
+		MarkDirty()
+	end)
 
 	U_Feat:AddSlider("LastTitanWaitSlider", {
 		Text = "Wait Time (s)",
 		Default = 60,
 		Min = 10,
 		Max = 300,
-		Rounding = 0
+		Rounding = 0,
+		Tooltip = "Keeps the last titan alive until this many seconds have passed."
 	})
 	Options.LastTitanWaitSlider:OnChanged(function() MarkDirty() end)
+
+	getgenv().KiraHub.UI.Labels.HoldTitan = U_Feat:AddLabel("Hold timer: idle")
 
 	local U_ESP = TabRef:AddRightGroupbox("ESP & Hitboxes", "eye")
 
@@ -3357,10 +3482,6 @@ local function BuildUpgradesTab(TabRef)
 		Text = "Perks to use (Food)"
 	})
 
-	M_Perk:AddDivider()
-	M_Perk:AddToggle("AutoClaimAchievementsToggle", {Text = "Auto Claim Achievements", Default = false})
-	Toggles.AutoClaimAchievementsToggle:OnChanged(function() MarkDirty() end)
-
 	local M_Skill = TabRef:AddRightGroupbox("Skill Tree", "tree-pine")
 
 	M_Skill:AddToggle("AutoSkillTreeToggle", {Text = "Auto Skill Tree", Default = false})
@@ -3452,6 +3573,26 @@ local function BuildUpgradesTab(TabRef)
 	Options.PrestigeStopAt:OnChanged(function() MarkDirty() end)
 
 	M_Prestige:AddLabel("Requires max level in the lobby", true)
+
+	-- ============================================================
+	-- Auto Claim (ported from Smooth Hub)
+	-- ============================================================
+	local M_Claim = TabRef:AddRightGroupbox("Auto Claim (Lobby)", "check-circle")
+	getgenv().KiraHub.UI.Labels.AutoClaimStatus = M_Claim:AddLabel("Claim status: Idle")
+
+	local claimToggles = {
+		{"AutoClaimMain", "Auto Claim Main Quests", "Automatically claim the main quests."},
+		{"AutoClaimSide", "Auto Claim Side Quests", "Automatically claim the side quests."},
+		{"AutoClaimAchievements", "Auto Claim Achievements", "Automatically claim achievements."},
+		{"AutoClaimWeekly", "Auto Claim Weekly Quests", "Automatically claim the weekly quests."},
+		{"AutoClaimDaily", "Auto Claim Daily Quests", "Automatically claim the daily quests."},
+		{"AutoOpenPages", "Auto Open Pages", "Opens Achievements/Quests when the red ! shows, claims, then closes."},
+		{"AutoCloseDailyReward", "Auto Close Daily Rewards", "Closes the Daily Rewards popup in the lobby."},
+	}
+	for _, def in ipairs(claimToggles) do
+		M_Claim:AddToggle(def[1], {Text = def[2], Default = false, Tooltip = def[3]})
+		Toggles[def[1]]:OnChanged(function() MarkDirty() end)
+	end
 end
 
 local function BuildWavesTab(TabRef)
@@ -3749,50 +3890,85 @@ local function BuildRaidsTab(TabRef)
 	R_Hunter:AddLabel("Deus Ex Machina/Equinox → Stohess", true)
 end
 
+-- Family data (ported from Symbiote Hub). Tier names come from the game's
+-- Families module; a static fallback keeps the dropdown usable everywhere.
+do
+	local Data = getgenv().KiraHub.Data
+	Data.FamilyList = {}
+	Data.FamilyTierMap = {}
+	Data.FamilyTiers = {"Common", "Rare", "Epic", "Legendary", "Mythic", "Secret"}
+	pcall(function()
+		local Families = require(ReplicatedStorage.Modules.Storage.Families)
+		for tier, group in pairs(Families) do
+			if type(group) == "table" then
+				for name in pairs(group) do
+					table.insert(Data.FamilyList, name)
+					Data.FamilyTierMap[name] = tier
+				end
+			end
+		end
+		table.sort(Data.FamilyList)
+	end)
+	if #Data.FamilyList == 0 then
+		Data.FamilyList = {
+			"Ackerman", "Arlert", "Azumabito", "Blouse", "Boyega", "Bozado",
+			"Braun", "Braus", "Finger", "Fritz", "Galliard", "Grice", "Helos",
+			"Hume", "Iglehaut", "Inocenio", "Kirstein", "Kruger", "Ksaver",
+			"Leonhart", "Munsell", "Pikale", "Ral", "Reeves", "Reiss", "Shiki",
+			"Smith", "Springer", "Tybur", "Yeager", "Zoe"
+		}
+		for tier, names in pairs({
+			Legendary = {"Yeager", "Ackerman", "Reiss"},
+			Common = {"Reeves", "Blouse", "Inocenio", "Munsell", "Boyega", "Ral", "Bozado", "Pikale", "Hume", "Iglehaut"},
+			Epic = {"Galliard", "Zoe", "Leonhart", "Tybur", "Ksaver", "Braun", "Finger", "Arlert"},
+			Secret = {"Shiki"},
+			Mythic = {"Helos", "Fritz"},
+			Rare = {"Braus", "Kruger", "Azumabito", "Smith", "Grice", "Springer", "Kirstein"},
+		}) do
+			for _, name in ipairs(names) do
+				Data.FamilyTierMap[name] = tier
+			end
+		end
+	end
+end
+
 local function BuildGlobalTab(TabRef)
 	local G_Roll = TabRef:AddLeftGroupbox("Family Roller", "users")
 	getgenv().KiraHub.UI.Labels.Family = G_Roll:AddLabel("Family: -")
+	getgenv().KiraHub.UI.Labels.FamilyStatus = G_Roll:AddLabel("Status: Idle")
 
-	G_Roll:AddToggle("AutoRollToggle", {Text = "Auto Roll Family", Default = false})
-	Toggles.AutoRollToggle:OnChanged(function() MarkDirty() end)
+	G_Roll:AddToggle("AutoFamilySpin", {Text = "Auto Family Spin", Default = false})
+	Toggles.AutoFamilySpin:OnChanged(function()
+		getgenv().KiraHub.State.FamilySpinning = false
+		MarkDirty()
+	end)
 
-	G_Roll:AddInput("TargetFamiliesInput", {
-		Default = "",
-		Text = "Target Families",
-		Placeholder = "Fritz,Yeager,Ackerman"
-	})
-
-	G_Roll:AddDropdown("SelectFamilyRarity", {
-		Values = {"Rare","Epic","Legendary","Mythical"},
+	G_Roll:AddDropdown("FamiliesToStop", {
+		Values = getgenv().KiraHub.Data.FamilyList,
 		Default = {},
 		Multi = true,
-		Text = "Stop at Rarity"
+		Text = "Families To Stop"
 	})
+	Options.FamiliesToStop:OnChanged(function() MarkDirty() end)
 
-	G_Roll:AddLabel("Mythical/Secret auto-stops", true)
-	G_Roll:AddLabel("Separate families with commas", true)
-	G_Roll:AddLabel("Must be in Main Menu", true)
-
-	local G_Claim = TabRef:AddLeftGroupbox("Auto Claim", "check-circle")
-
-	G_Claim:AddToggle("AutoClaimQuestsToggle", {
-		Text = "Auto Claim Quests (M/S/D/W)",
-		Default = false,
-		Tooltip = "Auto claims Main, Side, Daily, Weekly quests"
+	G_Roll:AddDropdown("FamilyTiersToStop", {
+		Values = getgenv().KiraHub.Data.FamilyTiers,
+		Default = {},
+		Multi = true,
+		Text = "Family Tiers To Stop"
 	})
-	Toggles.AutoClaimQuestsToggle:OnChanged(function() MarkDirty() end)
+	Options.FamilyTiersToStop:OnChanged(function() MarkDirty() end)
 
-	G_Claim:AddToggle("AutoClaimAchievementsGlobalToggle", {
-		Text = "Auto Claim Titles",
-		Default = false,
-		Tooltip = "Auto claims titles and achievements"
-	})
-	Toggles.AutoClaimAchievementsGlobalToggle:OnChanged(function() MarkDirty() end)
+	G_Roll:AddLabel("Stops when a selected family or tier appears", true)
+	G_Roll:AddLabel("Open Customisation > Family to roll", true)
 
 	local G_Slots = TabRef:AddRightGroupbox("Slot & Equipment", "layout-grid")
 
 	G_Slots:AddToggle("AutoSelectSlotToggle", {Text = "Auto Select Slot", Default = false})
-	Toggles.AutoSelectSlotToggle:OnChanged(function() MarkDirty() end)
+	Toggles.AutoSelectSlotToggle:OnChanged(function()
+		getgenv().KiraHub.State.AutoSlotBusy = false
+		MarkDirty()
+	end)
 
 	G_Slots:AddDropdown("SelectSlotDropdown", {
 		Values = {"Slot A", "Slot B", "Slot C"},
@@ -3800,6 +3976,7 @@ local function BuildGlobalTab(TabRef)
 		Multi = false,
 		Text = "Select Slot"
 	})
+	getgenv().KiraHub.UI.Labels.AutoSlot = G_Slots:AddLabel("Slot status: Idle")
 
 	G_Slots:AddToggle("AutoEquipBladeToggle", {
 		Text = "Auto Equip Blades in Lobby",
@@ -4193,6 +4370,151 @@ local function BuildFeedbackTab(TabRef)
 	F_Info:AddLabel("feedback submissions.")
 end
 
+-- ============================================================
+-- Config export / import (loadstring-style)
+-- Only settings that are ON or differ from their default are emitted,
+-- so omitted settings mean OFF / default.
+-- ============================================================
+function KiraConfigValue(v)
+	if type(v) == "boolean" then return tostring(v) end
+	if type(v) == "number" then return tostring(v) end
+	return string.format("%q", tostring(v))
+end
+
+function KiraConfigSameList(a, b)
+	if type(a) ~= "table" or type(b) ~= "table" then return false end
+	local countA, countB = 0, 0
+	for _, v in pairs(a) do if v == true then countA = countA + 1 end end
+	for _, v in pairs(b) do if v == true then countB = countB + 1 end end
+	if countA ~= countB then return false end
+	for k, v in pairs(a) do
+		if v == true and b[k] ~= true then return false end
+	end
+	return true
+end
+
+function KiraBuildConfigScript()
+	local defaults = getgenv().KiraHub.Defaults or {toggles = {}, options = {}}
+	local dToggles = defaults.toggles or {}
+	local dOptions = defaults.options or {}
+	local pending = {}
+
+	if Toggles then
+		for name, t in pairs(Toggles) do
+			-- Emit every toggle that is ON, plus any toggle that was switched
+			-- OFF from a default-ON state (omitted means OFF / default).
+			if type(t.Value) == "boolean" and (t.Value or dToggles[name] == true) then
+				pending[name] = tostring(t.Value)
+			end
+		end
+	end
+	if Options then
+		for name, o in pairs(Options) do
+			local v = o.Value
+			if type(v) == "number" or type(v) == "string" then
+				if dOptions[name] ~= v then pending[name] = KiraConfigValue(v) end
+			elseif type(v) == "table" then
+				local selected = {}
+				for k, val in pairs(v) do
+					if val == true then selected[#selected + 1] = tostring(k) end
+				end
+				if #selected > 0 and not KiraConfigSameList(v, dOptions[name]) then
+					table.sort(selected)
+					local quoted = {}
+					for i, k in ipairs(selected) do quoted[i] = string.format("%q", k) end
+					pending[name] = "{" .. table.concat(quoted, ", ") .. "}"
+				end
+			end
+		end
+	end
+
+	local lines = {"-- Kira Hub Premium config (only ON / changed settings)"}
+	local names = {}
+	for name in pairs(pending) do names[#names + 1] = name end
+	table.sort(names)
+	for _, name in ipairs(names) do
+		lines[#lines + 1] = name .. " = " .. pending[name]
+	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = 'loadstring(game:HttpGet("https://api.jnkie.com/api/v1/luascripts/public/51428b087781147e90ebff75072f665b51841956014e1b9e9601a9fe443393e8/download"))()'
+	return table.concat(lines, "\n")
+end
+
+function KiraResetToDefaults()
+	local defaults = getgenv().KiraHub.Defaults
+	if not defaults then return end
+	local dToggles = defaults.toggles or {}
+	local dOptions = defaults.options or {}
+	if Toggles then
+		for name, t in pairs(Toggles) do
+			if type(dToggles[name]) == "boolean" then
+				pcall(function() t:SetValue(dToggles[name]) end)
+			end
+		end
+	end
+	if Options then
+		for name, o in pairs(Options) do
+			local v = dOptions[name]
+			if type(v) == "number" or type(v) == "string" then
+				pcall(function() o:SetValue(v) end)
+			elseif type(v) == "table" then
+				local copy = {}
+				for k, val in pairs(v) do
+					if val == true then copy[k] = true end
+				end
+				pcall(function() o:SetValue(copy) end)
+			end
+		end
+	end
+end
+
+function KiraApplyConfig(text)
+	local applied = 0
+	KiraResetToDefaults()
+	for line in tostring(text or ""):gmatch("[^\r\n;]+") do
+		line = line:gsub("%-%-.*$", "")
+		line = line:gsub("^%s+", ""):gsub("%s+$", "")
+		local name, raw = line:match("^([%w_]+)%s*=%s*(.+)$")
+		if name and raw then
+			raw = raw:gsub("^%s+", ""):gsub("%s+$", "")
+			local value, isTable = nil, false
+			if raw == "true" then
+				value = true
+			elseif raw == "false" then
+				value = false
+			elseif raw:match("^%-?%d+%.?%d*$") then
+				value = tonumber(raw)
+			elseif raw:match("^[\"'].*[\"']$") then
+				value = raw:sub(2, -2)
+			elseif raw:match("^{.*}$") then
+				isTable = true
+				value = {}
+				for item in raw:sub(2, -2):gmatch("[^,]+") do
+					item = item:gsub("^%s+", ""):gsub("%s+$", "")
+					item = item:gsub("^[\"']", ""):gsub("[\"']$", "")
+					if item ~= "" then value[item] = true end
+				end
+			end
+			if value ~= nil then
+				if isTable then
+					if Options[name] then
+						pcall(function() Options[name]:SetValue(value) end)
+						applied = applied + 1
+					end
+				elseif Toggles[name] and type(value) == "boolean" then
+					pcall(function() Toggles[name]:SetValue(value) end)
+					applied = applied + 1
+				elseif Options[name] then
+					pcall(function() Options[name]:SetValue(value) end)
+					applied = applied + 1
+				end
+			end
+		end
+	end
+	MarkDirty()
+	return applied
+end
+
 local function BuildSettingsTab(TabRef)
 	local Set_Sys = Tabs.Settings:AddLeftGroupbox("System", "settings")
 	Set_Sys:AddLabel("Menu toggle"):AddKeyPicker("MenuKeybind", {Default = "RightControl", NoUI = true, Text = "Menu keybind"})
@@ -4238,6 +4560,108 @@ local function BuildSettingsTab(TabRef)
 	Options.MenuKeybind:OnChanged(function() SaveKeybinds() end)
 	Options.EmergencyStopKeybind:OnChanged(function() SaveKeybinds() end)
 	LoadKeybinds()
+
+	-- Snapshot the defaults before autoload config runs so the exporter can
+	-- skip every setting that is still at its default value.
+	do
+		local D = {toggles = {}, options = {}}
+		if Toggles then
+			for name, t in pairs(Toggles) do
+				if type(t.Value) == "boolean" then D.toggles[name] = t.Value end
+			end
+		end
+		if Options then
+			for name, o in pairs(Options) do
+				local v = o.Value
+				if type(v) == "number" or type(v) == "string" then
+					D.options[name] = v
+				elseif type(v) == "table" then
+					local copy, any = {}, false
+					for k, val in pairs(v) do
+						if val == true then copy[k] = true; any = true end
+					end
+					if any then D.options[name] = copy end
+				end
+			end
+		end
+		getgenv().KiraHub.Defaults = D
+	end
+
+	local Set_Cfg = TabRef:AddRightGroupbox("Config Export / Import", "share")
+	Set_Cfg:AddLabel("Only ON / changed settings are exported.", true)
+	Set_Cfg:AddLabel("Omitted settings mean OFF / default.", true)
+	getgenv().KiraHub.UI.Labels.ConfigStatus = Set_Cfg:AddLabel("Config: ready")
+
+	Set_Cfg:AddButton({
+		Text = "Export Config to Clipboard",
+		Func = function()
+			local script = KiraBuildConfigScript()
+			pcall(function() writefile(CFG_EXPORT_CONFIG, script) end)
+			pcall(function() setclipboard(script) end)
+			pcall(function()
+				local label = getgenv().KiraHub.UI.Labels.ConfigStatus
+				if label then label:SetText("Config: exported " .. tostring(#script) .. " chars") end
+			end)
+			Library:Notify({Title = "Config Export", Description = "Loadstring config copied to clipboard", Time = 4})
+		end
+	})
+
+	Set_Cfg:AddButton({
+		Text = "Export Config File",
+		Func = function()
+			local script = KiraBuildConfigScript()
+			local ok = pcall(function() writefile(CFG_EXPORT_CONFIG, script) end)
+			pcall(function()
+				local label = getgenv().KiraHub.UI.Labels.ConfigStatus
+				if label then
+					label:SetText(ok and ("Config: saved to export_config.lua") or "Config: file write failed")
+				end
+			end)
+			if ok then
+				Library:Notify({Title = "Config Export", Description = "Saved to export_config.lua", Time = 4})
+			end
+		end
+	})
+
+	Set_Cfg:AddInput("ConfigImportInput", {
+		Default = "",
+		Text = "Paste config (Name = value; ...)",
+		Placeholder = "AutoFarmToggle = true; StartDelaySlider = 25"
+	})
+	Options.ConfigImportInput:OnChanged(function() MarkDirty() end)
+
+	Set_Cfg:AddButton({
+		Text = "Apply Imported Config",
+		Func = function()
+			local text = GetOption("ConfigImportInput", "")
+			if type(text) ~= "string" or text == "" then
+				Library:Notify({Title = "Config Import", Description = "Paste a config first", Time = 3})
+				return
+			end
+			local applied = KiraApplyConfig(text)
+			pcall(function()
+				local label = getgenv().KiraHub.UI.Labels.ConfigStatus
+				if label then label:SetText("Config: applied " .. tostring(applied) .. " settings") end
+			end)
+			Library:Notify({Title = "Config Import", Description = "Applied " .. tostring(applied) .. " settings", Time = 4})
+		end
+	})
+
+	Set_Cfg:AddButton({
+		Text = "Load export_config.lua",
+		Func = function()
+			if not (isfile and isfile(CFG_EXPORT_CONFIG)) then
+				Library:Notify({Title = "Config Import", Description = "No export_config.lua found", Time = 3})
+				return
+			end
+			local applied = KiraApplyConfig(readfile(CFG_EXPORT_CONFIG))
+			pcall(function()
+				local label = getgenv().KiraHub.UI.Labels.ConfigStatus
+				if label then label:SetText("Config: applied " .. tostring(applied) .. " settings") end
+			end)
+			Library:Notify({Title = "Config Import", Description = "Applied " .. tostring(applied) .. " settings", Time = 4})
+		end
+	})
 end
 
 -- Auto Prestige worker (ported from Smooth Hub). Scoped to avoid top-level locals.
@@ -4886,6 +5310,19 @@ local function ScrapeMissionRewards()
 					end
 
 					if isSpecial then
+						-- Pumpkin Tokens are event currency, not mythical loot. Never
+						-- let them reach the mythical ping / special drop path.
+						for _, pumpkinDesc in ipairs(v:GetDescendants()) do
+							if (pumpkinDesc:IsA("TextLabel") or pumpkinDesc:IsA("TextButton"))
+								and string.lower(tostring(pumpkinDesc.Text or "")):find("pumpkin", 1, true)
+							then
+								isSpecial = false
+								break
+							end
+						end
+					end
+
+					if isSpecial then
 						local qty = inner:FindFirstChild("Quantity")
 						local itemId = string.match(tostring(v.Name), "(%d+)$")
 						local displayName = nil
@@ -5053,7 +5490,15 @@ local function DispatchMissionWebhook(data)
 	local url = getgenv().KiraHub.Webhooks.GetRewards()
 	if url == "" then return end
 
-	local hasSpecial = data.Special and next(data.Special) ~= nil
+	local hasSpecial = false
+	if data.Special then
+		for specialName in pairs(data.Special) do
+			if not string.lower(tostring(specialName)):find("pumpkin", 1, true) then
+				hasSpecial = true
+				break
+			end
+		end
+	end
 	local displayName = IsToggled("RewardsShowUsernameToggle") and player.Name or "Anonymous [ Premium User ]"
 	
 	local exec = "Unknown"
@@ -5112,6 +5557,8 @@ local function DispatchMythicalWebhook(itemName, qty)
 	local url = getgenv().KiraHub.Webhooks.GetRewards()
 	if url == "" then return end
 	if not IsToggled("ToggleMythicalFamilyWebhook") then return end
+	-- Pumpkin Tokens are normal event currency, not mythical.
+	if string.lower(tostring(itemName or "")):find("pumpkin", 1, true) then return end
 	
 	local liveBan = getgenv().KiraHub.State.BanStatus or "Unknown"
 	local cleanName = CleanRewardName(itemName)
@@ -5675,176 +6122,610 @@ task.spawn(function()
 	end
 end)
 
-local function IdentifyFamilyRarity(clanTitleText)
-	local rarity = string.lower(string.match(clanTitleText, "%((.-)%)") or "")
-	return rarity
+-- ============================================================
+-- Family rolling (ported from Symbiote Hub)
+-- ============================================================
+local function GetFamilyUI()
+	local cust = INTERFACE:FindFirstChild("Customisation")
+	return cust and cust:FindFirstChild("Family") or nil
 end
 
-local function ExecuteFamilyRoll(targets, rarities)
-	if not INTERFACE:FindFirstChild("Customisation") then return end
-	if not INTERFACE.Customisation.Visible then return end
-	
-	local familyString = ""
-	pcall(function() familyString = INTERFACE.Customisation.Family.Family.Title.Text end)
-	if familyString == "" then return end
-	
-	pcall(function() getgenv().KiraHub.UI.Labels.Family:SetText("Family: " .. familyString) end)
-	
-	local familyName = targets and string.lower(string.split(familyString, " ")[1]) or nil
-	local familyRarity = IdentifyFamilyRarity(familyString)
-	local stopRolling = false
-	
-	if targets and familyName and table.find(targets, familyName) then stopRolling = true end
-	if rarities and table.find(rarities, familyRarity) then stopRolling = true end
-	if familyRarity == "mythical" or familyRarity == "secret" then stopRolling = true end
-	
-	if stopRolling then
-		SetToggle("AutoRollToggle", false)
-		
-		if (familyRarity == "mythical" or familyRarity == "secret") and IsToggled("ToggleMythicalFamilyWebhook") then
-			local url = getgenv().KiraHub.Webhooks.GetRewards()
-			if url ~= "" then
-				local rareMythicals = {"helos", "fritz", "reiss", "tybur"}
-				local isRareMythical = false
-				for _, name in ipairs(rareMythicals) do
-					if string.find(string.lower(familyString), name) then isRareMythical = true break end
-				end
-				local liveBan = getgenv().KiraHub.State.BanStatus or "Unknown"
-				
-				getgenv().KiraHub.Webhooks.Post(url, {
-					content = isRareMythical and "@everyone 👑 RARE MYTHICAL FAMILY!" or "💎 MYTHICAL FAMILY!",
-					embeds = {{
-						title = "👑 Kira Hub Premium | Family Roll",
-						color = isRareMythical and 16711680 or 16750848,
-						fields = {
-							{name = "👤 Player", value = player.Name, inline = true},
-							{name = "👥 Family", value = tostring(familyString), inline = true},
-							{name = "💎 Rare Tier", value = isRareMythical and "YES" or "No", inline = true},
-							{name = "🛡️ Ban Status", value = liveBan, inline = false}
-						},
-						footer = {text = "Kira Hub Premium v2.9"},
-						timestamp = DateTime.now():ToIsoDate()
-					}}
-				})
-			end
-		end
-		
-		Library:Notify({Title = "👑 Family Roller", Description = "Target rolled: " .. familyString, Time = 5})
-		return
+local function FamilyListMatches(list, name)
+	if type(list) ~= "table" or not name then return false end
+	if list[name] == true then return true end
+	for k, v in pairs(list) do
+		if v == name or (k == name and v == true) then return true end
 	end
-	
+	return false
+end
+
+local function KiraFamilyNotify(name, tier)
 	pcall(function()
-		if INTERFACE:FindFirstChild("Warning") and INTERFACE.Warning.Prompt.Visible then
-			UseButton(INTERFACE.Warning.Prompt.Main.Yes)
-			task.wait(0.5)
-		end
-	end)
-	
-	pcall(function()
-		local customisation = INTERFACE:FindFirstChild("Customisation")
-		local famFrame = customisation and customisation:FindFirstChild("Family")
-		if famFrame and not famFrame.Visible then
-			UseButton(INTERFACE.Customisation.Categories.Family.Interact)
-			task.wait(1)
-		end
-	end)
-	
-	pcall(function()
-		local customisation = INTERFACE:FindFirstChild("Customisation")
-		local famFrame = customisation and customisation:FindFirstChild("Family")
-		local rollBtn = famFrame and famFrame:FindFirstChild("Buttons_2") and famFrame.Buttons_2:FindFirstChild("Roll")
-		if rollBtn then UseButton(rollBtn) end
+		local old = pGui:FindFirstChild("Kira_FamilyFoundNotify")
+		if old then old:Destroy() end
+
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "Kira_FamilyFoundNotify"
+		gui.ResetOnSpawn = false
+		gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		gui.Parent = pGui
+
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(0, 300, 0, 56)
+		frame.Position = UDim2.new(0.5, 0, 0.88, 0)
+		frame.AnchorPoint = Vector2.new(0.5, 0.5)
+		frame.BackgroundColor3 = Color3.fromRGB(24, 22, 34)
+		frame.BackgroundTransparency = 0.1
+		frame.BorderSizePixel = 0
+		frame.Parent = gui
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = Color3.fromRGB(140, 60, 255)
+		stroke.Thickness = 1.5
+		stroke.Parent = frame
+
+		local bar = Instance.new("Frame")
+		bar.Size = UDim2.new(0, 4, 0.65, 0)
+		bar.Position = UDim2.new(0, 8, 0.5, 0)
+		bar.AnchorPoint = Vector2.new(0, 0.5)
+		bar.BackgroundColor3 = Color3.fromRGB(80, 220, 150)
+		bar.BorderSizePixel = 0
+		bar.Parent = frame
+
+		local title = Instance.new("TextLabel")
+		title.Text = "Family found!"
+		title.Size = UDim2.new(1, -26, 0, 20)
+		title.Position = UDim2.new(0, 22, 0, 7)
+		title.BackgroundTransparency = 1
+		title.TextColor3 = Color3.fromRGB(80, 220, 150)
+		title.Font = Enum.Font.GothamBold
+		title.TextSize = 14
+		title.TextXAlignment = Enum.TextXAlignment.Left
+		title.Parent = frame
+
+		local sub = Instance.new("TextLabel")
+		sub.Text = string.format("%s (%s)", tostring(name), tostring(tier))
+		sub.Size = UDim2.new(1, -26, 0, 18)
+		sub.Position = UDim2.new(0, 22, 0, 27)
+		sub.BackgroundTransparency = 1
+		sub.TextColor3 = Color3.fromRGB(245, 240, 255)
+		sub.Font = Enum.Font.GothamMedium
+		sub.TextSize = 12
+		sub.TextXAlignment = Enum.TextXAlignment.Left
+		sub.Parent = frame
+
+		task.delay(5, function()
+			if gui and gui.Parent then gui:Destroy() end
+		end)
 	end)
 end
 
-task.spawn(function()
-	while true do
-		task.wait(0.25)
-		if not getgenv().KiraHubAOTR then break end
-		if not IsToggled("AutoRollToggle") then continue end
-		if not isMenu then continue end
-		
-		local targets, rarities
-		local text = GetOption("TargetFamiliesInput", "")
-		if text ~= "" then
-			text = string.lower(text)
-			targets = string.split(text, ",")
-			for i, v in ipairs(targets) do targets[i] = v:match("^%s*(.-)%s*$") end
-		end
-		
-		local raritySelected = GetOption("SelectFamilyRarity", {})
-		if raritySelected then
-			rarities = {}
-			for rarityName, isEnabled in pairs(raritySelected) do
-				if isEnabled then table.insert(rarities, string.lower(rarityName)) end
-			end
-		end
-		
-		pcall(function() ExecuteFamilyRoll(targets, rarities) end)
-	end
-end)
+local function SendFamilyWebhook(familyString, tier)
+	if not IsToggled("ToggleMythicalFamilyWebhook") then return end
+	local lowerTier = string.lower(tostring(tier or ""))
+	if lowerTier ~= "mythic" and lowerTier ~= "mythical" and lowerTier ~= "secret" then return end
+	local url = getgenv().KiraHub.Webhooks.GetRewards()
+	if url == "" then return end
 
-task.spawn(function()
-	while true do
-		task.wait(2)
-		if not getgenv().KiraHubAOTR then break end
-		if IsToggled("AutoRollToggle") and not isMenu then
-			SetToggle("AutoRollToggle", false)
-			Library:Notify({Title = "Family Roller", Description = "Must be in Main Menu", Time = 3})
-		end
+	local rareMythicals = {"helos", "fritz", "reiss", "tybur"}
+	local lowerName = string.lower(tostring(familyString or ""))
+	local isRareMythical = false
+	for _, name in ipairs(rareMythicals) do
+		if lowerName:find(name, 1, true) then isRareMythical = true break end
 	end
-end)
+	local liveBan = getgenv().KiraHub.State.BanStatus or "Unknown"
 
-local function ClaimQuestCategory(profile, category)
-	local list = profile.Quests and profile.Quests[category]
-	if type(list) ~= "table" then return 0 end
-	
-	local claimed = 0
-	for _, q in pairs(list) do
-		if type(q) == "table" and q.Tag and q.Rewarded == nil then
-			local maxVal = q.Amount or 0
-			local curVal = tonumber(q.Current) or 0
-			if maxVal > 0 and curVal >= maxVal then
-				local ok, result = pcall(function()
-					return getRemote:InvokeServer("Functions", "Quest", q.Tag, category)
+	getgenv().KiraHub.Webhooks.Post(url, {
+		content = isRareMythical and "@everyone 👑 RARE MYTHICAL FAMILY!" or "💎 MYTHICAL FAMILY!",
+		embeds = {{
+			title = "👑 Kira Hub Premium | Family Roll",
+			color = isRareMythical and 16711680 or 16750848,
+			fields = {
+				{name = "👤 Player", value = player.Name, inline = true},
+				{name = "👥 Family", value = tostring(familyString), inline = true},
+				{name = "💎 Tier", value = tostring(tier), inline = true},
+				{name = "🛡️ Ban Status", value = liveBan, inline = false}
+			},
+			footer = {text = "Kira Hub Premium v2.9"},
+			timestamp = DateTime.now():ToIsoDate()
+		}}
+	})
+end
+
+local function StopFamilySpin(reason)
+	SetToggle("AutoFamilySpin", false)
+	getgenv().KiraHub.State.FamilySpinning = false
+	pcall(function()
+		local label = getgenv().KiraHub.UI.Labels.FamilyStatus
+		if label then label:SetText("Status: " .. tostring(reason)) end
+	end)
+end
+
+local function ExecuteFamilySpin()
+	local state = getgenv().KiraHub.State
+	if state.FamilySpinning then return end
+	if not IsToggled("AutoFamilySpin") then return end
+
+	state.FamilySpinning = true
+	task.spawn(function()
+		local Data = getgenv().KiraHub.Data
+		local statusLabel = getgenv().KiraHub.UI.Labels.FamilyStatus
+		local familyLabel = getgenv().KiraHub.UI.Labels.Family
+		local function setStatus(text)
+			pcall(function()
+				if statusLabel then statusLabel:SetText("Status: " .. tostring(text)) end
+			end)
+		end
+
+		while getgenv().KiraHubAOTR and IsToggled("AutoFamilySpin") do
+			local famUI = GetFamilyUI()
+			if not famUI then
+				setStatus("Open Customisation > Family")
+				task.wait(1.5)
+			else
+				local lucky = false
+				pcall(function()
+					local pity = famUI:FindFirstChild("Pity")
+					lucky = pity ~= nil and pity:IsA("TextLabel")
+						and string.upper(tostring(pity.Text or "")):find("LEGENDARY", 1, true) ~= nil
 				end)
-				if ok and result ~= nil then
-					claimed = claimed + 1
+				local mode = lucky and "Lucky" or "Normal"
+				setStatus("Rolling (" .. mode .. ")...")
+
+				local ok, result, result1, result2, result3, result4 = pcall(function()
+					return getRemote:InvokeServer("Family", "Roll", mode)
+				end)
+
+				local spinsTable, gotFamily, pityTable, luckVal
+				local totalSpins, pityVal = 0, nil
+				if ok then
+					if type(result) == "table" and type(result1) == "string" then
+						spinsTable = result
+						gotFamily = result1
+						pityTable = type(result2) == "table" and result2 or nil
+						luckVal = result4
+						local entry = spinsTable[mode] or spinsTable.Normal
+						if type(entry) == "table" then
+							totalSpins = (tonumber(entry.Amount) or 0) + (tonumber(entry.Free) or 0)
+						end
+						if pityTable then
+							pityVal = pityTable[mode] or pityTable.Normal
+						end
+					elseif type(result2) == "string" then
+						gotFamily = result2
+						totalSpins = (tonumber(result) or 0) + (tonumber(result1) or 0)
+						pityVal = tonumber(result3)
+					end
 				end
-				task.wait(0.15)
+
+				if type(gotFamily) == "string" and gotFamily ~= "" then
+					local tier = Data.FamilyTierMap[gotFamily] or "Common"
+
+					pcall(function()
+						local title = famUI:FindFirstChild("Family")
+						title = title and title:FindFirstChild("Title")
+						if title and title:IsA("TextLabel") then
+							title.Text = string.upper(gotFamily) .. " (" .. tier .. ")"
+							title.Visible = true
+						end
+					end)
+					pcall(function()
+						local buttons = famUI:FindFirstChild("Buttons") or famUI:FindFirstChild("Buttons_2")
+						local rollBtn = buttons and buttons:FindFirstChild("Roll")
+						local rollTitle = rollBtn and rollBtn:FindFirstChild("Title")
+						if rollTitle and rollTitle:IsA("TextLabel") then
+							rollTitle.Text = "ROLL (" .. tostring(totalSpins) .. ")"
+						end
+					end)
+					pcall(function()
+						local pity = famUI:FindFirstChild("Pity")
+						if pity and pity:IsA("TextLabel") and pityVal ~= nil then
+							if mode == "Lucky" then
+								pity.Text = "LEGENDARY+ PITY: " .. tostring(pityVal) .. "/100"
+							else
+								pity.Text = "EPIC+ PITY: " .. tostring(pityVal) .. "/400"
+							end
+						end
+					end)
+					pcall(function()
+						if familyLabel then
+							familyLabel:SetText("Family: " .. gotFamily .. " (" .. tier .. ")")
+						end
+					end)
+
+					local stopFamilies = GetOption("FamiliesToStop", {})
+					local stopTiers = GetOption("FamilyTiersToStop", {})
+					local shouldStop = FamilyListMatches(stopFamilies, gotFamily)
+						or FamilyListMatches(stopTiers, tier)
+
+					if shouldStop then
+						KiraFamilyNotify(gotFamily, tier)
+						Library:Notify({
+							Title = "👑 Family Roller",
+							Description = "Target rolled: " .. gotFamily .. " (" .. tier .. ")",
+							Time = 6
+						})
+						SendFamilyWebhook(gotFamily, tier)
+						StopFamilySpin("Found " .. gotFamily .. " (" .. tier .. ")")
+						break
+					end
+
+					if totalSpins <= 0 then
+						setStatus("No spins left")
+						Library:Notify({Title = "👑 Family Roller", Description = "Out of family spins", Time = 5})
+						StopFamilySpin("Out of spins")
+						break
+					end
+				end
+
+				if ok then
+					task.wait(0.1)
+				else
+					setStatus("Roll failed, retrying...")
+					task.wait(0.5)
+				end
+			end
+		end
+		state.FamilySpinning = false
+	end)
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		if not getgenv().KiraHubAOTR then break end
+		if IsToggled("AutoFamilySpin") then
+			pcall(ExecuteFamilySpin)
+		end
+	end
+end)
+
+-- ============================================================
+-- Auto Claim (ported from Smooth Hub)
+-- ============================================================
+local KiraClaim = {
+	cooldowns = setmetatable({}, {__mode = "k"}),
+	stats = {Main = 0, Side = 0, Weekly = 0, Daily = 0, Ach = 0},
+	lastDaily = -math.huge,
+	lastQuestOpen = -math.huge,
+	lastAchOpen = -math.huge,
+	lastLog = 0,
+}
+local KIRA_CLAIM_COOLDOWN = 300
+
+local function KiraClaimFindInterface()
+	return pGui:FindFirstChild("Interface")
+end
+
+local function KiraClaimVisible(obj)
+	if not obj then return false end
+	if not obj:IsA("GuiObject") then return false end
+	local ref = obj
+	while ref and ref ~= pGui do
+		if ref:IsA("GuiObject") and not ref.Visible then return false end
+		if ref:IsA("ScreenGui") and not ref.Enabled then return false end
+		ref = ref.Parent
+	end
+	return obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0
+end
+
+local function KiraClaimNormalize(obj)
+	local text = tostring(obj.Text or "")
+	text = text:gsub("<[^>]->", "")
+	text = text:gsub("^%s+", ""):gsub("%s+$", "")
+	return text:upper()
+end
+
+local function KiraFindPath(root, ...)
+	local ref = root
+	for _, name in ipairs({...}) do
+		ref = ref and ref:FindFirstChild(name)
+		if not ref then return nil end
+	end
+	return ref
+end
+
+local function KiraClaimPress(obj)
+	if not obj or not obj.Parent then return false end
+	pcall(function() GuiService.SelectedObject = obj end)
+	task.wait(0.15)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	end)
+	task.wait(0.4)
+	pcall(function()
+		if type(firesignal) == "function" then
+			firesignal(obj.MouseButton1Click)
+			firesignal(obj.Activated)
+		end
+	end)
+	task.wait(0.25)
+	pcall(function()
+		local sg = obj:FindFirstAncestorOfClass("ScreenGui")
+		local inset = (sg and sg.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
+		local pt = obj.AbsolutePosition + obj.AbsoluteSize / 2 + inset
+		VirtualInputManager:SendMouseButtonEvent(pt.X, pt.Y, 0, true, game, 0)
+		task.wait(0.05)
+		VirtualInputManager:SendMouseButtonEvent(pt.X, pt.Y, 0, false, game, 0)
+	end)
+	task.wait(0.2)
+	pcall(function()
+		if GuiService.SelectedObject == obj then GuiService.SelectedObject = nil end
+	end)
+	return true
+end
+
+local function KiraClaimOnCooldown(obj)
+	local last = KiraClaim.cooldowns[obj]
+	return last ~= nil and (os.clock() - last) < KIRA_CLAIM_COOLDOWN
+end
+
+local function KiraClaimQuests()
+	local claimed = 0
+	local interfaceRef = KiraClaimFindInterface()
+	local quests = interfaceRef and interfaceRef:FindFirstChild("Quests")
+	if not quests then return 0 end
+	local catKey = {
+		Main = "AutoClaimMain",
+		Side = "AutoClaimSide",
+		Weekly = "AutoClaimWeekly",
+		Daily = "AutoClaimDaily",
+	}
+	for _, item in ipairs(quests:GetDescendants()) do
+		if item.Name == "Button" and item:IsA("GuiObject") then
+			local parent = item.Parent
+			if parent and parent.Name == "Claim" and KiraClaimVisible(parent) then
+				local tag = item:GetAttribute("Tag")
+				local category = item:GetAttribute("Category")
+				if tag ~= nil and category ~= nil then
+					local key = catKey[tostring(category)]
+					if key and IsToggled(key) and not KiraClaimOnCooldown(item) then
+						KiraClaim.cooldowns[item] = os.clock()
+						local ok, result = pcall(function()
+							return getRemote:InvokeServer("Functions", "Quest", tostring(tag), tostring(category))
+						end)
+						if ok and result ~= nil then
+							KiraClaim.stats[tostring(category)] = (KiraClaim.stats[tostring(category)] or 0) + 1
+							claimed = claimed + 1
+						end
+						task.wait(0.3)
+					end
+				end
 			end
 		end
 	end
 	return claimed
 end
 
-local function ExecuteAutoClaimQuests()
-	if not IsToggled("AutoClaimQuestsToggle") then return end
-	if not isLobby then return end
-	
-	local profile = GetPlayerData()
-	if not profile or type(profile.Quests) ~= "table" then return end
-	
-	local totalClaimed = 0
-	for _, cat in ipairs({"Main", "Side", "Daily", "Weekly"}) do
-		local claimed = ClaimQuestCategory(profile, cat)
-		totalClaimed = totalClaimed + claimed
+local function KiraClaimAchievements()
+	if not IsToggled("AutoClaimAchievements") then return 0 end
+	local interfaceRef = KiraClaimFindInterface()
+	local achievements = interfaceRef and interfaceRef:FindFirstChild("Achievements")
+	local list = achievements and achievements:FindFirstChild("List")
+	list = list and list:FindFirstChild("Inner")
+	if not list then return 0 end
+	local claimed = 0
+	for _, item in ipairs(list:GetChildren()) do
+		local id = tonumber(item.Name)
+		if id and id ~= 99 and not KiraClaimOnCooldown(item) then
+			local ok, shouldClaim = pcall(function()
+				local inner = item:FindFirstChild("Inner")
+				local aState = inner and inner:FindFirstChild("A_State")
+				local title = aState and aState:FindFirstChild("Title")
+				return aState ~= nil and aState.Visible and title ~= nil and tostring(title.Text) == "CLAIM"
+			end)
+			if ok and shouldClaim then
+				KiraClaim.cooldowns[item] = os.clock()
+				local ok2, result = pcall(function()
+					return getRemote:InvokeServer("S_Achievements", "Claim", id)
+				end)
+				if ok2 and result ~= nil then
+					KiraClaim.stats.Ach = KiraClaim.stats.Ach + 1
+					claimed = claimed + 1
+				end
+				task.wait(0.3)
+			end
+		end
 	end
-	
-	if totalClaimed > 0 then
-		Library:Notify({Title = "👑 Quest Claim", Description = "Claimed " .. totalClaimed .. " quests", Time = 3})
+	return claimed
+end
+
+local function KiraClaimDailyDirect()
+	if not IsToggled("AutoClaimDaily") then return 0 end
+	if os.clock() - KiraClaim.lastDaily < KIRA_CLAIM_COOLDOWN then return 0 end
+	KiraClaim.lastDaily = os.clock()
+	local claimed = 0
+	for i = 1, 3 do
+		if not (getgenv().KiraHubAOTR and IsToggled("AutoClaimDaily")) then break end
+		local ok, result = pcall(function()
+			return getRemote:InvokeServer("Functions", "Quest", "Daily " .. i, "Daily")
+		end)
+		if ok and result ~= nil then
+			KiraClaim.stats.Daily = KiraClaim.stats.Daily + 1
+			claimed = claimed + 1
+		end
+		task.wait(0.5)
+	end
+	return claimed
+end
+
+local function KiraClaimUpdateStatus()
+	local label = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels.AutoClaimStatus
+	if not label then return end
+	pcall(function()
+		label:SetText(("Claimed | Main %d · Side %d · Weekly %d · Daily %d · Ach %d"):format(
+			KiraClaim.stats.Main,
+			KiraClaim.stats.Side,
+			KiraClaim.stats.Weekly,
+			KiraClaim.stats.Daily,
+			KiraClaim.stats.Ach
+		))
+	end)
+end
+
+local function KiraLooksLikeClose(obj)
+	local lowered = string.lower(tostring(obj.Name))
+	if lowered:find("close", 1, true) or lowered:find("exit", 1, true)
+		or lowered:find("cancel", 1, true) or lowered == "x"
+	then
+		return true
+	end
+	if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+		local text = KiraClaimNormalize(obj)
+		if text == "X" or text == "×" then return true end
+	end
+	return false
+end
+
+local function KiraDailyRewardTitle()
+	for _, item in ipairs(pGui:GetDescendants()) do
+		if (item:IsA("TextLabel") or item:IsA("TextButton")) and KiraClaimVisible(item) then
+			if KiraClaimNormalize(item):find("^DAILY REWARDS") then
+				return item
+			end
+		end
+	end
+	return nil
+end
+
+local function KiraFindDailyClose(title)
+	local parent = title.Parent
+	for _ = 1, 8 do
+		if not parent or parent == pGui then break end
+		for _, item in ipairs(parent:GetDescendants()) do
+			if item:IsA("GuiButton") and KiraClaimVisible(item) and KiraLooksLikeClose(item) then
+				return item
+			end
+			if item:IsA("GuiObject") and not item:IsA("GuiButton")
+				and string.lower(item.Name):find("close", 1, true) and KiraClaimVisible(item)
+			then
+				local button = item:FindFirstChildWhichIsA("GuiButton", true)
+				if button and KiraClaimVisible(button) then return button end
+			end
+		end
+		parent = parent.Parent
+	end
+	local root = title
+	while root.Parent and root.Parent ~= pGui and not root.Parent:IsA("ScreenGui") do
+		root = root.Parent
+	end
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+	local best, bestX = nil, -1
+	for _, item in ipairs(root:GetDescendants()) do
+		if item:IsA("GuiButton") and KiraClaimVisible(item) then
+			local pos, size = item.AbsolutePosition, item.AbsoluteSize
+			if size.X <= 130 and size.Y <= 130
+				and pos.Y < viewport.Y * 0.25
+				and pos.X > viewport.X * 0.5
+				and pos.X > bestX
+			then
+				best, bestX = item, pos.X
+			end
+		end
+	end
+	return best
+end
+
+local function KiraHasNewBadge(container)
+	if not container then return false end
+	for _, item in ipairs(container:GetDescendants()) do
+		if item.Name == "New" and item:IsA("GuiObject") and item.Visible then
+			return true
+		end
+	end
+	return false
+end
+
+local function KiraAutoOpenPages()
+	if not IsToggled("AutoOpenPages") then return end
+	-- Quests page
+	local wantsQuests = IsToggled("AutoClaimMain") or IsToggled("AutoClaimSide")
+		or IsToggled("AutoClaimWeekly") or IsToggled("AutoClaimDaily")
+	if wantsQuests then
+		local quests = INTERFACE:FindFirstChild("Quests")
+		local isOpen = quests ~= nil and KiraClaimVisible(quests)
+		if not isOpen then
+			local cards = KiraFindPath(INTERFACE, "Topbar", "Main", "Categories", "Quests")
+			if KiraHasNewBadge(cards) and os.clock() - KiraClaim.lastQuestOpen >= 60 then
+				local button = KiraFindPath(INTERFACE, "Topbar", "Main", "Categories", "Quests", "Interact")
+				if button and button:IsA("GuiButton") and KiraClaimVisible(button) then
+					KiraClaim.lastQuestOpen = os.clock()
+					KiraClaimPress(button)
+					task.wait(1)
+				end
+			end
+		else
+			KiraClaimQuests()
+			task.wait(0.3)
+			local close = quests:FindFirstChild("Close")
+			local closeButton = close and (close:IsA("GuiButton") and close or close:FindFirstChildWhichIsA("GuiButton", true))
+			if closeButton and KiraClaimVisible(closeButton) then
+				KiraClaimPress(closeButton)
+			end
+		end
+	end
+	-- Achievements page
+	if IsToggled("AutoClaimAchievements") then
+		local achievements = INTERFACE:FindFirstChild("Achievements")
+		local isOpen = achievements ~= nil and KiraClaimVisible(achievements)
+		if not isOpen then
+			local badge = KiraFindPath(INTERFACE, "Topbar", "Main", "Icons", "Achievements", "New")
+			if badge and badge:IsA("GuiObject") and badge.Visible
+				and os.clock() - KiraClaim.lastAchOpen >= 60
+			then
+				local button = KiraFindPath(INTERFACE, "Topbar", "Main", "Icons", "Achievements")
+				if button and button:IsA("GuiButton") and KiraClaimVisible(button) then
+					KiraClaim.lastAchOpen = os.clock()
+					KiraClaimPress(button)
+					task.wait(1)
+				end
+			end
+		else
+			KiraClaimAchievements()
+			task.wait(0.3)
+			local close = KiraFindPath(INTERFACE, "Achievements", "Top", "Achievements_Close")
+			if close and close:IsA("GuiButton") then KiraClaimPress(close) end
+		end
 	end
 end
 
-local function ExecuteAutoClaimAchievements()
-	if not IsToggled("AutoClaimAchievementsGlobalToggle") and not IsToggled("AutoClaimAchievementsToggle") then return end
+local function ExecuteAutoClaimTick()
 	if not isLobby then return end
-	
-	for id = 1, 100 do
-		pcall(function() getRemote:InvokeServer("S_Achievements", "Claim", id) end)
-		task.wait(0.05)
+	if not (IsToggled("AutoClaimMain") or IsToggled("AutoClaimSide")
+		or IsToggled("AutoClaimWeekly") or IsToggled("AutoClaimDaily")
+		or IsToggled("AutoClaimAchievements"))
+	then
+		return
+	end
+	local total = 0
+	total = total + KiraClaimQuests()
+	total = total + KiraClaimAchievements()
+	total = total + KiraClaimDailyDirect()
+	if total > 0 or (os.clock() - KiraClaim.lastLog) > 30 then
+		KiraClaim.lastLog = os.clock()
+		KiraClaimUpdateStatus()
+	end
+	if IsToggled("AutoOpenPages") then
+		pcall(KiraAutoOpenPages)
 	end
 end
+
+task.spawn(function()
+	while getgenv().KiraHubAOTR do
+		task.wait(1.2)
+		if isLobby and IsToggled("AutoCloseDailyReward") then
+			pcall(function()
+				local title = KiraDailyRewardTitle()
+				if not title then return end
+				local close = KiraFindDailyClose(title)
+				if close then KiraClaimPress(close) end
+			end)
+		end
+	end
+end)
 
 local function ExecuteAutoEquipMetaPerks()
 	if not IsToggled("AutoEquipMetaPerksToggle") then return end
@@ -6095,35 +6976,194 @@ local function ExecuteAutoSkillTree()
 	end
 end
 
-local function ExecuteAutoSelectSlot()
-	if not IsToggled("AutoSelectSlotToggle") then return end
-	local state = getgenv().KiraHub.State
-	if state.AutoSlotTeleportQueued then return end
-	if player:GetAttribute("Slot") then return end
-	
-	local selectedSlot = GetOption("SelectSlotDropdown", "Slot A")
-	local slotLetter = string.sub(selectedSlot, -1)
-	
-	pcall(function() getRemote:InvokeServer("Functions", "Select", slotLetter) end)
-	
-	local deadline = os.clock() + 5
-	repeat
-		task.wait(0.1)
-	until player:GetAttribute("Slot") or os.clock() > deadline
-	
-	if player:GetAttribute("Slot") then
-		state.AutoSlotTeleportQueued = true
-		-- Smooth Hub style: after the slot is auto-selected, return to the lobby.
-		task.delay(2, function()
-			pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
-			if game.PlaceId ~= LOBBY_ID then
-				pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
+-- ============================================================
+-- Auto Select Slot (exact Smooth Hub character selection)
+-- Presses the SELECT button under the chosen SLOT label.
+-- ============================================================
+local function KiraSlotText(obj)
+	local text = tostring(obj.Text or "")
+	text = text:gsub("<[^>]->", "")
+	return (text:gsub("^%s+", ""):gsub("%s+$", "")):upper()
+end
+
+local function KiraSlotIsLabel(obj)
+	return obj:IsA("TextLabel") or obj:IsA("TextButton")
+end
+
+local function KiraSlotVisible(obj)
+	local ref = obj
+	while ref and ref ~= pGui do
+		if ref:IsA("GuiObject") and not ref.Visible then return false end
+		if ref:IsA("ScreenGui") and not ref.Enabled then return false end
+		ref = ref.Parent
+	end
+	return obj:IsA("GuiObject") and obj.AbsoluteSize.X > 0 and obj.AbsoluteSize.Y > 0
+end
+
+local function KiraSlotButton(obj)
+	if obj:IsA("GuiButton") then return obj end
+	local parent = obj.Parent
+	for _ = 1, 3 do
+		if not parent then break end
+		if parent:IsA("GuiButton") then return parent end
+		parent = parent.Parent
+	end
+	parent = obj.Parent
+	if parent then return parent:FindFirstChildWhichIsA("GuiButton", true) end
+	return nil
+end
+
+local function KiraSlotFindSelect(holder)
+	for _, item in ipairs(holder:GetDescendants()) do
+		if KiraSlotIsLabel(item) and KiraSlotText(item) == "SELECT" and KiraSlotVisible(item) then
+			local button = KiraSlotButton(item)
+			if button then return button end
+		end
+	end
+	return nil
+end
+
+local function KiraSlotFind(letter)
+	local wanted = "SLOT " .. letter
+	for _, item in ipairs(pGui:GetDescendants()) do
+		if KiraSlotIsLabel(item) and KiraSlotText(item) == wanted and KiraSlotVisible(item) then
+			local parent = item.Parent
+			for _ = 1, 6 do
+				if not parent or parent == pGui then break end
+				local button = KiraSlotFindSelect(parent)
+				if button then return button end
+				parent = parent.Parent
 			end
-			state.AutoSlotTeleportQueued = false
+		end
+	end
+	return nil
+end
+
+local function KiraSlotScreenVisible()
+	for _, item in ipairs(pGui:GetDescendants()) do
+		if KiraSlotIsLabel(item) and KiraSlotText(item) == "SLOT A" and KiraSlotVisible(item) then
+			return true
+		end
+	end
+	return false
+end
+
+local function KiraSlotPress(button)
+	pcall(function() GuiService.SelectedObject = button end)
+	task.wait(0.15)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	end)
+	task.wait(1)
+	if button.Parent and KiraSlotVisible(button) then
+		pcall(function()
+			if type(firesignal) == "function" then
+				firesignal(button.MouseButton1Click)
+				firesignal(button.Activated)
+			end
 		end)
-		Library:Notify({Title = "Auto Slot", Description = "Slot " .. slotLetter .. " selected - returning to lobby in 2s", Time = 3})
-	elseif not isLobby then
-		pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+	end
+	pcall(function()
+		if GuiService.SelectedObject == button then GuiService.SelectedObject = nil end
+	end)
+end
+
+local function KiraSlotMouseClick(button)
+	pcall(function()
+		local point = button.AbsolutePosition + button.AbsoluteSize / 2
+		local gui = button:FindFirstAncestorOfClass("ScreenGui")
+		if not (gui and gui.IgnoreGuiInset) then
+			point = point + GuiService:GetGuiInset()
+		end
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+		task.wait(0.05)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+	end)
+end
+
+local function KiraSlotKey(button)
+	local pos, size = button.AbsolutePosition, button.AbsoluteSize
+	return math.floor(pos.X + 0.5) .. "," .. math.floor(pos.Y + 0.5) .. ","
+		.. math.floor(size.X + 0.5) .. "," .. math.floor(size.Y + 0.5)
+end
+
+local function KiraSlotSetStatus(text)
+	pcall(function()
+		local label = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels.AutoSlot
+		if label then label:SetText("Slot status: " .. tostring(text)) end
+	end)
+end
+
+local function KiraSlotTrySelect(letter)
+	local button = KiraSlotFind(letter)
+	if not button then
+		KiraSlotSetStatus("Slot " .. letter .. " UI not found")
+		return false
+	end
+
+	KiraSlotSetStatus("Waiting for slot screen to load...")
+	local key, stable = KiraSlotKey(button), 0
+	for _ = 1, 20 do
+		task.wait(0.2)
+		if not getgenv().KiraHubAOTR then return false end
+		if not (button.Parent and KiraSlotVisible(button)) then
+			button = KiraSlotFind(letter)
+			if not button then return false end
+			key, stable = KiraSlotKey(button), 0
+		else
+			local newKey = KiraSlotKey(button)
+			if newKey == key then
+				stable = stable + 1
+				if stable >= 3 then break end
+			else
+				key, stable = newKey, 0
+			end
+		end
+	end
+
+	for attempt = 1, 3 do
+		if not getgenv().KiraHubAOTR then return false end
+		button = KiraSlotFind(letter)
+		if not button then
+			if not KiraSlotScreenVisible() then return true end
+			break
+		end
+		KiraSlotSetStatus(("Selecting Slot %s... (try %d/3)"):format(letter, attempt))
+		if attempt == 2 then
+			KiraSlotMouseClick(button)
+		else
+			KiraSlotPress(button)
+		end
+		for _ = 1, 12 do
+			task.wait(0.25)
+			if not KiraSlotScreenVisible() then
+				return true
+			end
+		end
+	end
+	return not KiraSlotScreenVisible()
+end
+
+local function ExecuteAutoSelectSlot()
+	local state = getgenv().KiraHub.State
+	if state.AutoSlotBusy then return end
+	if not IsToggled("AutoSelectSlotToggle") then return end
+
+	local selectedSlot = tostring(GetOption("SelectSlotDropdown", "Slot A") or "Slot A")
+	local letter = string.sub(selectedSlot, -1)
+	if letter ~= "A" and letter ~= "B" and letter ~= "C" then letter = "A" end
+
+	state.AutoSlotBusy = true
+	local ok, result = pcall(KiraSlotTrySelect, letter)
+	state.AutoSlotBusy = false
+	if ok and result then
+		KiraSlotSetStatus("Selected Slot " .. letter)
+	elseif ok then
+		KiraSlotSetStatus("Could not select Slot " .. letter .. " - retrying")
+	else
+		KiraSlotSetStatus("Select error: " .. tostring(result))
 	end
 end
 
@@ -6159,8 +7199,7 @@ task.spawn(function()
 		task.wait(5)
 		if not getgenv().KiraHubAOTR then break end
 		if isLobby then
-			pcall(ExecuteAutoClaimQuests)
-			pcall(ExecuteAutoClaimAchievements)
+			pcall(ExecuteAutoClaimTick)
 			pcall(ExecuteAutoEquipMetaPerks)
 			pcall(ExecuteAutoDeletePerks)
 			pcall(ExecuteAutoUpgradeGear)
@@ -6176,9 +7215,9 @@ task.spawn(function()
 	while true do
 		task.wait(2)
 		if not getgenv().KiraHubAOTR then break end
-		if isLobby then
-			pcall(ExecuteAutoSelectSlot)
-		end
+		-- The character-select screen can appear in the lobby or menu place.
+		-- KiraSlotTrySelect only acts when a real "SLOT A/B/C" + SELECT is visible.
+		pcall(ExecuteAutoSelectSlot)
 	end
 end)
 
@@ -6572,8 +7611,8 @@ local function ExecuteAutoStartLogic()
 		mapName = GetOption("MissionMapDropdown", "Shiganshina")
 		objective = GetOption("MissionObjectiveDropdown", "Skirmish")
 		if mapName == "Boosted Map" then
-			local boostedMap = workspace:GetAttribute("Boosted_Map")
-			if not boostedMap or boostedMap == "" then
+			local boostedMap = KiraGetBoostedMap()
+			if not boostedMap then
 				local labels = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
 				if labels and labels.BoostedMap then
 					pcall(function() labels.BoostedMap:SetText("Boosted: None active") end)
@@ -6598,8 +7637,8 @@ local function ExecuteAutoStartLogic()
 	
 	if difficulty == "Hardest" then
 		local diffOrder = missionType == "Raids"
-			and {"Aberrant", "Severe", "Hard"}
-			or {"Aberrant", "Severe", "Hard", "Normal", "Easy"}
+			and {"Freedom", "Aberrant", "Severe", "Hard"}
+			or {"Freedom", "Aberrant", "Severe", "Hard", "Normal", "Easy"}
 		for _, diff in ipairs(diffOrder) do
 			if not IsToggled("AutoStartToggle") then break end
 			pcall(function()
@@ -6699,6 +7738,15 @@ local function UpdateStateLabels()
 		getgenv().KiraHub.UI.Labels.SessXP:SetText("Total XP: " .. tostring(getgenv().KiraHub.State.TotalXP))
 		getgenv().KiraHub.UI.Labels.SessMythical:SetText("Mythical Drops: " .. tostring(getgenv().KiraHub.State.MythicalDrops))
 		getgenv().KiraHub.UI.Labels.SessCrashes:SetText("Crashes Detected: " .. tostring(getgenv().KiraHub.State.Crashes))
+		local holdLabel = getgenv().KiraHub.UI.Labels.HoldTitan
+		if holdLabel then
+			if IsToggled("LastTitanWaitToggle") then
+				local left = math.floor(tonumber(getgenv().KiraHub.State.HoldSafeLeft) or 0)
+				holdLabel:SetText("Hold timer: " .. tostring(left) .. "s left")
+			else
+				holdLabel:SetText("Hold timer: idle")
+			end
+		end
 		
 		local hRatio = elapsed / 3600
 		local goldRate = hRatio > 0.01 and math.floor(getgenv().KiraHub.State.TotalGold / hRatio) or 0
@@ -6863,10 +7911,40 @@ local function SaveAllStates()
 
 		local encoded = HttpService:JSONEncode(states)
 		writefile(AllStatesFile, encoded)
+		-- Keep a human-friendly, loadstring-style export in sync as well.
+		pcall(function() writefile(CFG_EXPORT_CONFIG, KiraBuildConfigScript()) end)
 	end)
 end
 
+-- Applies "Name = value" globals set by an exported/loadstring config.
+function KiraApplyGlobalConfig()
+	if not (Toggles and Options) then return end
+	for name, t in pairs(Toggles) do
+		local v = getgenv()[name]
+		if type(v) == "boolean" then
+			pcall(function() t:SetValue(v) end)
+		end
+	end
+	for name, o in pairs(Options) do
+		local v = getgenv()[name]
+		if type(v) == "number" or type(v) == "string" then
+			pcall(function() o:SetValue(v) end)
+		elseif type(v) == "table" then
+			local clean, any = {}, false
+			for k, val in pairs(v) do
+				if type(k) == "string" and val == true then
+					clean[k] = true
+					any = true
+				end
+			end
+			if any then pcall(function() o:SetValue(clean) end) end
+		end
+	end
+end
+
 local function LoadAllStates()
+	-- Globals first: an exported config sets them before loading the hub.
+	pcall(KiraApplyGlobalConfig)
 	pcall(function()
 		if not isfile(AllStatesFile) then return end
 		
@@ -6899,6 +7977,9 @@ local function LoadAllStates()
 				end
 			end
 		end
+
+		-- An exported/imported config always wins over the saved JSON state.
+		pcall(KiraApplyGlobalConfig)
 	end)
 end
 
