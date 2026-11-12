@@ -101,6 +101,10 @@ getgenv().KiraHub = {
 		LastForceRetryAt = 0,
 		LastAutoRetryClick = 0,
 		LastSpearChangeAt = 0,
+		SpearRefillCooldownUntil = 0,
+		SpearFires = 0,
+		LastSpearFireAt = 0,
+		BossBurstUntil = 0,
 		MissionTargetAt = 0,
 		BladeSettleUntil = 0,
 		MomentumNextAt = 0,
@@ -1444,6 +1448,35 @@ function KiraBladeTargets(targetPart, validNapes)
 	return list
 end
 
+-- The server collapses a bundle of Slash + Register pairs that arrive in the
+-- same frame into a single accepted swing, which is why a boss sometimes ate
+-- 10 hits and sometimes only one. Pace the burst so every pair gets its own
+-- frame, and never start a second burst while the first is still running.
+function KiraBladeBossBurst(nape, hits)
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	if not (state and nape and nape.Parent) then return 0 end
+	hits = math.clamp(math.floor(tonumber(hits) or 10), 1, 60)
+	local now = os.clock()
+	if now < (state.BossBurstUntil or 0) then return 0 end
+
+	local interval = 0.1
+	state.BossBurstUntil = now + hits * interval + 0.3
+	task.spawn(function()
+		for i = 1, hits do
+			if not getgenv().KiraHubAOTR then break end
+			if state.EmergencyStop then break end
+			if not (nape and nape.Parent) then break end
+			KiraM1()
+			KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+			KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
+			if i < hits then
+				task.wait(interval + math.random() * 0.03)
+			end
+		end
+	end)
+	return hits * 2
+end
+
 function KiraBladeAttack(targetPart, validNapes, isBoss)
 	local st = getgenv().KiraHub and getgenv().KiraHub.State
 	if not st then return 0 end
@@ -1461,16 +1494,16 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 	local sent = 0
 	for _, nape in ipairs(list) do
 		if nape and nape.Parent then
-			-- SH sends one Slash + Register per nape. Bosses additionally get
-			-- the tuned Blade Boss Hits loop so raids still finish.
-			local hits = 1
-			if isBoss then hits = math.max(1, bossHits) end
-			for _ = 1, hits do
-				if sent >= 700 then break end
-				if nape.Parent then
-					KiraNet:Fire(postRemote, "Attacks", "Slash", true)
-					KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
-				end
+			-- Boss bonus is applied per nape, never to the whole list. The old
+			-- code multiplied the boss hit count by every nape in a multi-hit
+			-- sweep and flooded the remote, so the server dropped the bundle.
+			local napeIsBoss = IsBossTarget(nape) or (isBoss and nape == targetPart)
+			if napeIsBoss then
+				sent = sent + KiraBladeBossBurst(nape, bossHits)
+			else
+				-- SH sends one Slash + Register per nape.
+				KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+				KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
 				sent = sent + 2
 			end
 		end
@@ -1542,6 +1575,20 @@ function RefillCore:SetStatus(text)
 	getgenv().KiraHub.State.RefillStatus = text
 end
 
+-- A refused shot can leave the HUD reading 0 for a moment even though the
+-- refill already succeeded, which used to chain into a second (or endless)
+-- reload. Every successful spear refill therefore starts a short cooldown and
+-- resets the fire counter, so one dry streak can only ever cost one refill.
+function KiraNoteSpearRefill()
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	if not state then return end
+	local now = os.clock()
+	state.SpearRefillCooldownUntil = now + 5
+	state.LastSpearChangeAt = now
+	state.SpearFires = 0
+	state.LastSpearFireAt = now
+end
+
 function RefillCore:Try(forceKind, forceNow)
 	local now = os.clock()
 	if self.Refilling then return false end
@@ -1552,6 +1599,16 @@ function RefillCore:Try(forceKind, forceNow)
 	if not kind then
 		self:SetStatus("Unknown weapon")
 		return false
+	end
+
+	-- One spear refill per dry streak: after a success the HUD can still show
+	-- 0 (server lag), and the old code immediately queued another refill.
+	if kind == "Spears" and not forceNow then
+		local state = getgenv().KiraHub and getgenv().KiraHub.State
+		if state and now < (state.SpearRefillCooldownUntil or 0) then
+			self:SetStatus("Spears just refilled")
+			return false
+		end
 	end
 
 	self.LastAttempt = now
@@ -1618,7 +1675,10 @@ function RefillCore:Try(forceKind, forceNow)
 				self.LongRangeFails = 0
 				self.Success = self.Success + 1
 				self:SetStatus("Refilled (remote)")
-				if kind == "Spears" then KiraResetSpearMarks() end
+				if kind == "Spears" then
+					KiraResetSpearMarks()
+					KiraNoteSpearRefill()
+				end
 				return true
 			end
 
@@ -1678,7 +1738,10 @@ function RefillCore:Try(forceKind, forceNow)
 		if done then
 			self.Success = self.Success + 1
 			self:SetStatus("Refilled (station)")
-			if kind == "Spears" then KiraResetSpearMarks() end
+			if kind == "Spears" then
+				KiraResetSpearMarks()
+				KiraNoteSpearRefill()
+			end
 			return true
 		end
 
@@ -2738,6 +2801,11 @@ function AutoFarm:Start()
 								local beforeUnused = unusedSpears()
 								local beforeAmmo = KiraSpearsLeft()
 								local okFire = pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
+								if okFire then
+									local fireState = getgenv().KiraHub.State
+									fireState.SpearFires = (fireState.SpearFires or 0) + 1
+									fireState.LastSpearFireAt = os.clock()
+								end
 								if multi and okFire then
 									-- SH verifies the spear actually left the slot
 									-- before exploding; a refused shot never explodes.
@@ -2779,10 +2847,14 @@ function AutoFarm:Start()
 							end)
 						else
 							-- Hand off to the refill loop (proper station refill).
-							getgenv().KiraHub.State.RefillRequest = "Spears"
-							local station = GetRefillStation(root)
-							if station then
-								KiraNet:Fire(postRemote, "Attacks", "Reload", station)
+							-- A refill that just succeeded can leave the HUD at 0
+							-- for a moment: never stack a second one.
+							if now >= (getgenv().KiraHub.State.SpearRefillCooldownUntil or 0) then
+								getgenv().KiraHub.State.RefillRequest = "Spears"
+								local station = GetRefillStation(root)
+								if station then
+									KiraNet:Fire(postRemote, "Attacks", "Reload", station)
+								end
 							end
 						end
 					end
@@ -2848,15 +2920,20 @@ task.spawn(function()
 		-- holding ammo it refuses to fire (stuck at "1/12"). When the count has
 		-- not moved while spears are in use, rebuild the spear marks and force
 		-- a real station refill instead of retrying the same dead slot.
+		-- This only runs after several real S_Fire attempts, and never right
+		-- after a successful refill (that is what caused double refills).
 		local spearCount = KiraSpearsLeft()
 		if spearCount ~= nil then
 			if state.LastSpearSeen ~= spearCount then
 				state.LastSpearSeen = spearCount
 				state.LastSpearChangeAt = now
+				state.SpearFires = 0
 			end
 			local spearsActive = weaponType == "Spears" or KiraHasSpearLoadout()
 			local attacking = (AutoFarm and AutoFarm._running) or IsToggled("ManualAutoAttackToggle")
 			if spearsActive and attacking and spearCount > 0
+				and (state.SpearFires or 0) >= 5
+				and now >= (state.SpearRefillCooldownUntil or 0)
 				and (now - (state.LastSpearChangeAt or now)) > 6
 				and (now - lastReloadTime) > 6
 			then
@@ -2879,11 +2956,13 @@ task.spawn(function()
 		local request = state.RefillRequest
 		if request then
 			state.RefillRequest = nil
-			local okRefill = pcall(function() RefillCore:Try(request) end)
-			if not okRefill then
-				-- Never let a refill error wedge the farm in "paused" state.
-				RefillCore.Refilling = false
-				state.Refilling = false
+			if not (request == "Spears" and now < (state.SpearRefillCooldownUntil or 0)) then
+				local okRefill = pcall(function() RefillCore:Try(request) end)
+				if not okRefill then
+					-- Never let a refill error wedge the farm in "paused" state.
+					RefillCore.Refilling = false
+					state.Refilling = false
+				end
 			end
 		end
 
@@ -2908,7 +2987,9 @@ task.spawn(function()
 
 		elseif weaponType == "Spears" then
 			local count = KiraSpearsLeft()
-			if count ~= nil and count <= 0 and (now - lastRefillTime) > 1.2 then
+			if count ~= nil and count <= 0 and (now - lastRefillTime) > 1.2
+				and now >= (state.SpearRefillCooldownUntil or 0)
+			then
 				lastRefillTime = now
 				pcall(function() RefillCore:Try("Spears") end)
 			end
@@ -3048,6 +3129,11 @@ task.spawn(function()
 					task.spawn(function()
 						local beforeAmmo = KiraSpearsLeft()
 						local okFire = pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
+						if okFire then
+							local fireState = getgenv().KiraHub.State
+							fireState.SpearFires = (fireState.SpearFires or 0) + 1
+							fireState.LastSpearFireAt = os.clock()
+						end
 						if not okFire then return end
 						if multi and beforeAmmo ~= nil then
 							local deadline = os.clock() + 1.0
@@ -3457,6 +3543,8 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
 	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
 	I_Upd:AddLabel("[+] Multi Hit (Risky) = exact SH blades/TS farm")
+	I_Upd:AddLabel("[+] Boss multi hit paced (no dropped boss hits)")
+	I_Upd:AddLabel("[+] Spear refill can no longer double-trigger")
 	I_Upd:AddLabel("[+] Blades reload only when the whole set is used")
 	I_Upd:AddLabel("[+] Auto M1 + 400+ studs/s blade momentum")
 	I_Upd:AddLabel("[+] No Kill Lag (titan ragdoll stripped)")
