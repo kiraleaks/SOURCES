@@ -66,7 +66,6 @@ local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local TweenService = game:GetService("TweenService")
-local MarketplaceService = game:GetService("MarketplaceService")
 
 getgenv().KiraHub = {
 	Config = {},
@@ -92,7 +91,24 @@ getgenv().KiraHub = {
 		TargetNape = nil,
 		FeedbackCooldown = 0,
 		Dirty = false,
-		MissionStartTime = nil
+		MissionStartTime = nil,
+		-- Runtime fields (declared here so State always has a stable shape).
+		SlotTeleporting = false,
+		SlotSelectDone = false,
+		SlotSelectClicked = false,
+		SlotLobbyTryAt = 0,
+		LastSlashAt = 0,
+		LastForceRetryAt = 0,
+		LastSpearChangeAt = 0,
+		MissionTargetAt = 0,
+		BladeSettleUntil = 0,
+		HoldSafeLeft = 0,
+		ForceSpearReset = false,
+		ShifterSkillsRunning = false,
+		FamilySpinning = false,
+		Refilling = false,
+		RefillStatus = "Idle",
+		_sawZeroTitans = false
 	},
 	UI = { Tabs = {}, Options = nil, Toggles = nil, Labels = {} },
 	Classes = {},
@@ -116,7 +132,6 @@ if not player then
 	return
 end
 local pGui = player:WaitForChild("PlayerGui")
-local mobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 local LOBBY_ID = 14916516914
 local MENU_ID = 13379208636
@@ -134,7 +149,6 @@ local CFG_SESSION_MYTHICALS = CFG_FOLDER .. "/session_mythicals.txt"
 local CFG_SESSION_CRASHES = CFG_FOLDER .. "/session_crashes.txt"
 local CFG_RETURN_COUNTER = CFG_FOLDER .. "/return_counter.txt"
 local CFG_BAN_CACHE = CFG_FOLDER .. "/last_ban_status.txt"
-local ConfigFile = CFG_FOLDER .. "/dropdown_config.json"
 local AllStatesFile = CFG_FOLDER .. "/all_states.json"
 local CFG_EXPORT_CONFIG = CFG_FOLDER .. "/export_config.lua"
 local CFG_KEY = CFG_FOLDER .. "/premium_key.txt"
@@ -837,7 +851,7 @@ function KiraBladeSpare()
 	return left
 end
 
-local KiraSpearAttrs = {"Spears", "Spear", "SpearCount", "TSpears", "ThunderSpears", "TS_Count"}
+KiraSpearAttrs = {"Spears", "Spear", "SpearCount", "TSpears", "ThunderSpears", "TS_Count"}
 
 function KiraHasSpearLoadout()
 	local char = player.Character
@@ -975,6 +989,18 @@ function KiraNape(titan)
 	return nil
 end
 
+-- A nape part lives at Titan.Hitboxes.Hit.Nape, so the titan model is three
+-- parents up. Walking the ancestry is nil-safe (a part can be unparented
+-- mid-frame while the farm loop still holds a reference to it).
+function KiraNapeModel(nape)
+	local node = nape
+	for _ = 1, 3 do
+		if not node then return nil end
+		node = node.Parent
+	end
+	return node
+end
+
 function KiraTitanAlive(titan)
 	if not (titan and titan.Parent) then return false end
 	local hum = titan:FindFirstChildOfClass("Humanoid")
@@ -984,7 +1010,7 @@ function KiraTitanAlive(titan)
 end
 
 -- Kira's place -> refill path map (station streaming support)
-local KIRA_REFILL_PLACES = {
+KIRA_REFILL_PLACES = {
 	[13379349730]     = {"Unclimbable", "Props", "HQ"},
 	[14012874501]     = {"Unclimbable", "Props", "HQ"},
 	[13904207646]     = {"Climbable", "_Walls", "Gate"},
@@ -1300,9 +1326,11 @@ function RefillCore:Try(forceKind, forceNow)
 		and os.clock() >= self.LongRangeBlockedUntil
 
 	local post = postRemote
-	if not post or not post.Parent then
+	if not (post and post.Parent) then
 		pcall(function()
-			post = ReplicatedStorage.Assets.Remotes:WaitForChild("POST", 5)
+			local assets = ReplicatedStorage:FindFirstChild("Assets")
+			local remotes = assets and assets:FindFirstChild("Remotes")
+			if remotes then post = remotes:WaitForChild("POST", 5) end
 		end)
 	end
 
@@ -1314,7 +1342,7 @@ function RefillCore:Try(forceKind, forceNow)
 		if not station then
 			self:SetStatus("No refill station")
 			-- Still try a remote without a station reference as a last resort.
-			if longRangeAllowed then
+			if longRangeAllowed and post and post.Parent then
 				pcall(function() post:FireServer("Attacks", "Reload") end)
 			end
 			break
@@ -1646,6 +1674,9 @@ function AutoFarm:Start()
 	end)
 
 	task.spawn(function()
+		-- Guard the whole farm loop: one unexpected error used to kill farming
+		-- silently until rejoin. Errors now stop the loop and warn once.
+		local ok, loopErr = pcall(function()
 		local function isWavesMode()
 			return workspace:FindFirstChild("Waves") ~= nil
 		end
@@ -1676,7 +1707,6 @@ function AutoFarm:Start()
 		if not self._running then return end
 
 		local titansFolder = workspace:FindFirstChild("Titans")
-		local lastAttack = 0
 		local currentChar, root = nil, nil
 		local attackTitanSpawnTime = nil
 
@@ -2142,7 +2172,7 @@ function AutoFarm:Start()
 			for i = 1, #holdNapes do
 				local nape = holdNapes[i]
 				if not nape or not nape.Parent then continue end
-				local titanModel = nape.Parent.Parent.Parent
+				local titanModel = KiraNapeModel(nape)
 				if not KiraTitanAlive(titanModel) then continue end
 				local tName = titanModel.Name
 				local isBoss = getgenv().KiraHub.Data.BossNames[tName]
@@ -2233,7 +2263,7 @@ function AutoFarm:Start()
 				else
 					local pick = state.MissionTarget
 					if not pick or not pick.Parent or (now - (state.MissionTargetAt or 0)) > 2.5
-						or not KiraTitanAlive(pick.Parent.Parent.Parent)
+						or not KiraTitanAlive(KiraNapeModel(pick))
 						or not table.find(holdNapes, pick)
 					then
 						pick = holdNapes[math.random(1, #holdNapes)]
@@ -2354,8 +2384,6 @@ function AutoFarm:Start()
 					and (dx * dx + dz * dz) <= AttackRangeSq
 					and KiraSlashGate(now)
 				then
-					lastAttack = now
-
 					local hitTargets = {targetPart}
 					if IsToggled("MultiHitToggle") then
 						local count = 1
@@ -2364,7 +2392,7 @@ function AutoFarm:Start()
 							if count >= maxHits then break end
 							local n = validNapes[i]
 							if n ~= targetPart and n and n.Parent then
-								if KiraTitanAlive(n.Parent.Parent.Parent) then
+								if KiraTitanAlive(KiraNapeModel(n)) then
 									table.insert(hitTargets, n)
 									count = count + 1
 								end
@@ -2451,6 +2479,11 @@ function AutoFarm:Start()
 
 			task.wait(0.05)
 		end
+		end)
+		if not ok then
+			self._running = false
+			pcall(function() warn("[Kira Premium] farm loop error: " .. tostring(loopErr)) end)
+		end
 	end)
 end
 
@@ -2463,19 +2496,11 @@ end
 
 local lastReloadTime = 0
 local lastRefillTime = 0
-local lastAmmoValueSeen = -1
-local lastAmmoChangeAt = 0
-local lastBladeValueSeen = -1
-local lastBladeChangeAt = 0
 local currentTrackedChar = nil
 
 player.CharacterAdded:Connect(function()
 	lastReloadTime = 0
 	lastRefillTime = 0
-	lastAmmoValueSeen = -1
-	lastAmmoChangeAt = os.clock()
-	lastBladeValueSeen = -1
-	lastBladeChangeAt = os.clock()
 	currentTrackedChar = nil
 end)
 
@@ -2496,8 +2521,6 @@ task.spawn(function()
 
 		if char ~= currentTrackedChar then
 			currentTrackedChar = char
-			lastBladeValueSeen = -1
-			lastBladeChangeAt = os.clock()
 			lastReloadTime = 0
 			lastRefillTime = 0
 		end
@@ -2769,7 +2792,7 @@ do
 	}
 
 	-- Robust download: game:HttpGet first, then request()/http_request() fallbacks.
-	local function KiraHttpGet(url)
+	function KiraHttpGet(url)
 		local ok, res = pcall(function() return game:HttpGet(url) end)
 		if ok and type(res) == "string" and #res > 0 then return res end
 		if type(request) == "function" then
@@ -2787,7 +2810,7 @@ do
 		return nil
 	end
 
-	local function KiraLoadModule(relPath)
+	function KiraLoadModule(relPath)
 		local loader = loadstring or load
 		if type(loader) ~= "function" then
 			lib_errors[#lib_errors + 1] = relPath .. ": loadstring unavailable"
@@ -4963,8 +4986,8 @@ end
 
 -- Auto Prestige worker (ported from Kira). Scoped to avoid top-level locals.
 do
-	local prestigeBoostText = { Luck = "luckboost", Gold = "goldboost", EXP = "expboost" }
-	local prestigeClickers = {
+	prestigeBoostText = { Luck = "luckboost", Gold = "goldboost", EXP = "expboost" }
+	prestigeClickers = {
 		function(obj)
 			if type(firesignal) ~= "function" then return false end
 			return pcall(firesignal, obj.Activated)
@@ -4987,11 +5010,11 @@ do
 		end,
 	}
 
-	local function PrestigeNormalize(text)
+	function PrestigeNormalize(text)
 		return tostring(text or ""):gsub("<[^>]->", ""):lower():gsub("[^%w]", "")
 	end
 
-	local function PrestigeStatus(text)
+	function PrestigeStatus(text)
 		local labels = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
 		local label = labels and labels.AutoPrestigeStatus
 		if label then
@@ -4999,7 +5022,7 @@ do
 		end
 	end
 
-	local function PrestigeVisible(obj)
+	function PrestigeVisible(obj)
 		local ref = obj
 		while ref and ref ~= pGui do
 			if ref:IsA("GuiObject") and not ref.Visible then return false end
@@ -5009,7 +5032,7 @@ do
 		return true
 	end
 
-	local function PrestigePath(...)
+	function PrestigePath(...)
 		local ref = pGui
 		for _, name in ipairs({...}) do
 			ref = ref and ref:FindFirstChild(name)
@@ -5017,7 +5040,7 @@ do
 		return ref
 	end
 
-	local function PrestigeHasText(obj, needle)
+	function PrestigeHasText(obj, needle)
 		needle = PrestigeNormalize(needle)
 		if obj:IsA("TextButton") and PrestigeNormalize(obj.Text) == needle then return true end
 		for _, item in ipairs(obj:GetDescendants()) do
@@ -5030,7 +5053,7 @@ do
 		return false
 	end
 
-	local function PrestigeAncestorHasText(obj, needle)
+	function PrestigeAncestorHasText(obj, needle)
 		needle = PrestigeNormalize(needle)
 		local parent = obj and obj.Parent
 		for _ = 1, 5 do
@@ -5047,7 +5070,7 @@ do
 		return false
 	end
 
-	local function PrestigeFindButton(target, filter)
+	function PrestigeFindButton(target, filter)
 		local wanted = PrestigeNormalize(target)
 		for _, item in ipairs(pGui:GetDescendants()) do
 			if item:IsA("GuiButton") and PrestigeVisible(item)
@@ -5060,7 +5083,7 @@ do
 		return nil
 	end
 
-	local function PrestigeFindLabel(target)
+	function PrestigeFindLabel(target)
 		local wanted = PrestigeNormalize(target)
 		for _, item in ipairs(pGui:GetDescendants()) do
 			if item:IsA("TextLabel") and PrestigeVisible(item)
@@ -5072,17 +5095,17 @@ do
 		return nil
 	end
 
-	local function PrestigeFindYes()
+	function PrestigeFindYes()
 		return PrestigeFindButton("YES", function(btn)
 			return PrestigeAncestorHasText(btn, "areyousureyouwanttoprestige")
 		end)
 	end
 
-	local function PrestigeLevel()
+	function PrestigeLevel()
 		return tonumber(player:GetAttribute("Prestige")) or 0
 	end
 
-	local function PrestigeLevelFull()
+	function PrestigeLevelFull()
 		local label = PrestigePath("Interface", "Equipment", "Prestige", "Progress", "Level")
 		if not (label and label:IsA("TextLabel")) then
 			return false, "Prestige page not found"
@@ -5096,14 +5119,14 @@ do
 		return false, ("Level not full ( %s / %s )"):format(tostring(a), tostring(b))
 	end
 
-	local function PrestigeClick(obj, methodIndex)
+	function PrestigeClick(obj, methodIndex)
 		if not obj or not obj.Parent or not PrestigeVisible(obj) then return false end
 		local method = prestigeClickers[methodIndex or 1]
 		if not method then return false end
 		return (pcall(method, obj))
 	end
 
-	local function PrestigeWait(getter, done, seconds)
+	function PrestigeWait(getter, done, seconds)
 		local deadline = os.clock() + (seconds or 10)
 		local methodIndex = 1
 		while os.clock() < deadline and IsToggled("AutoPrestigeToggle") do
@@ -5124,7 +5147,7 @@ do
 		return done()
 	end
 
-	local function PrestigeCardButton(label)
+	function PrestigeCardButton(label)
 		local boostTexts = {"luckboost", "goldboost", "expboost"}
 		local parents = {}
 		local ref = label
@@ -5156,15 +5179,15 @@ do
 		return nil
 	end
 
-	local function PrestigeFindFinish()
+	function PrestigeFindFinish()
 		return PrestigeFindButton("FINISH")
 	end
 
-	local function PrestigeFindNext()
+	function PrestigeFindNext()
 		return PrestigeFindButton("NEXT")
 	end
 
-	local function RunPrestige(phase)
+	function RunPrestige(phase)
 		local st = getgenv().KiraHub.State
 		st.PrestigeBusy = true
 		local ok, failAt = pcall(function()
@@ -5333,7 +5356,7 @@ do
 	end)
 
 	local adminHopRequested = false
-	local function CheckForAdmin(candidate)
+	function CheckForAdmin(candidate)
 		if not IsToggled("AntiAdminToggle") or not candidate or candidate == player then return end
 		local isAdmin = false
 		pcall(function()
@@ -5362,7 +5385,7 @@ do
 		end
 	end)
 
-	local function ApplyFPSLimit()
+	function ApplyFPSLimit()
 		if not IsToggled("FpsLockToggle") then
 			local reset = setfpscap or set_fps_cap or setfps
 			if type(reset) == "function" then pcall(reset, 9999) end
@@ -5514,14 +5537,6 @@ function GetPerkXP(rarity, level)
 	local baseXP = {Common = 100, Rare = 250, Epic = 625, Legendary = 2500, Secret = 10000}
 	return (baseXP[rarity] or 0) * math.max(level, 1)
 end
-
-local PerkLevelXP = {
-	Common = {50, 100, 150, 200, 250, 300, 350, 400, 450, 500},
-	Rare = {125, 250, 375, 500, 625, 750, 875, 1000, 1125, 1250},
-	Epic = {250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500},
-	Legendary = {500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000},
-	Secret = {2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000}
-}
 
 function ScrapeMissionRewards()
 	local data = {Stats = {}, Total = {}, Items = {}, Special = {}}
@@ -6595,7 +6610,7 @@ function ExecuteFamilySpin()
 						local title = famUI:FindFirstChild("Family")
 						title = title and title:FindFirstChild("Title")
 						if title and title:IsA("TextLabel") then
-							title.Text = string.upper(gotFamily) .. " (" .. tier .. ")"
+							title.Text = string.upper(tostring(gotFamily)) .. " (" .. tier .. ")"
 							title.Visible = true
 						end
 					end)
@@ -6673,7 +6688,7 @@ end)
 -- ============================================================
 -- Auto Claim (ported from Kira)
 -- ============================================================
-local KiraClaim = {
+KiraClaim = {
 	cooldowns = setmetatable({}, {__mode = "k"}),
 	stats = {Main = 0, Side = 0, Weekly = 0, Daily = 0, Ach = 0},
 	lastDaily = -math.huge,
@@ -6681,7 +6696,7 @@ local KiraClaim = {
 	lastAchOpen = -math.huge,
 	lastLog = 0,
 }
-local KIRA_CLAIM_COOLDOWN = 300
+KIRA_CLAIM_COOLDOWN = 300
 
 function KiraClaimFindInterface()
 	return pGui:FindFirstChild("Interface")
@@ -7202,7 +7217,7 @@ function ExecuteAutoEnhancePerks()
 	end
 end
 
-local SkillPaths = {
+SkillPaths = {
 	Blades = {
 		Damage = {"1","2","3","4","5","6","7","8","9","10","11","12","13","26","27","28","29","30","31","32","33","34","35","36","37"},
 		Critical = {"1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25"}
@@ -8406,4 +8421,3 @@ Library:Notify({
 
 SaveSession()
 pcall(SendExecutionWebhook)
-s
