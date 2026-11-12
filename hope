@@ -99,6 +99,7 @@ getgenv().KiraHub = {
 		SlotLobbyTryAt = 0,
 		LastSlashAt = 0,
 		LastForceRetryAt = 0,
+		LastAutoRetryClick = 0,
 		LastSpearChangeAt = 0,
 		MissionTargetAt = 0,
 		BladeSettleUntil = 0,
@@ -645,6 +646,62 @@ function UseButton(button)
 	task.wait(0.05)
 	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
 	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	return true
+end
+
+-- Auto Retry is a GUI click only: it clicks the Rewards screen's RETRY
+-- button. The retry remotes are reserved for Force Retry and the stuck-result
+-- recovery path, never for Auto Retry.
+function KiraFindRewardsRetry()
+	local rewardsGui = INTERFACE:FindFirstChild("Rewards")
+	if not rewardsGui or not rewardsGui.Visible then return nil, nil end
+	for _, d in ipairs(rewardsGui:GetDescendants()) do
+		if (d:IsA("TextButton") or d:IsA("TextLabel")) and d.Visible then
+			local text = string.upper(tostring(d.Text or ""))
+			text = text:gsub("<[^>]->", ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if text:match("^RETRY") then
+				local clickable = d
+				for _ = 1, 4 do
+					if not clickable or clickable == pGui then break end
+					if clickable:IsA("GuiButton") then break end
+					clickable = clickable.Parent
+				end
+				if clickable and not clickable:IsA("GuiButton") then clickable = nil end
+				return d, clickable
+			end
+		end
+	end
+	return nil, nil
+end
+
+function KiraClickRewardsRetry()
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	local now = os.clock()
+	if state then
+		if now - (state.LastAutoRetryClick or 0) < 1.5 then return false end
+		state.LastAutoRetryClick = now
+	end
+	local label, button = KiraFindRewardsRetry()
+	if not label then return false end
+	if button then
+		if type(firesignal) == "function" then
+			pcall(firesignal, button.Activated)
+			pcall(firesignal, button.MouseButton1Click)
+		end
+		pcall(UseButton, button)
+		return true
+	end
+	-- No GuiButton wrapper: click the label's on-screen position directly.
+	pcall(function()
+		local gui = label:FindFirstAncestorOfClass("ScreenGui")
+		local offset = (gui and gui.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
+		local point = label.AbsolutePosition + label.AbsoluteSize / 2 + offset
+		VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+		task.wait(0.05)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+		task.wait(0.06)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+	end)
 	return true
 end
 
@@ -1508,7 +1565,7 @@ function UpdateTitanESP()
 						local label = Instance.new("TextLabel")
 						label.Size = UDim2.new(1, 0, 1, 0)
 						label.BackgroundTransparency = 1
-						label.Font = Enum.Font.GothamBold
+						label.Font = Enum.Font.Fantasy
 						label.TextSize = 14
 						label.TextColor3 = Color3.fromRGB(255, 255, 255)
 						label.TextStrokeTransparency = 0.3
@@ -1870,8 +1927,17 @@ function AutoFarm:Start()
 			end
 
 			if not wavesMode and isFemaleRaid and not femaleExists and not attackExists then
-				task.wait(0.05)
-				continue
+				-- Female raid: only Female / Attack titans spawn. If the
+				-- objective folder has not streamed in yet but a boss model is
+				-- already there, fight it instead of idling forever.
+				local raidBoss = titansFolder and (
+					titansFolder:FindFirstChild("Female_Titan")
+					or titansFolder:FindFirstChild("Attack_Titan")
+				)
+				if not raidBoss then
+					task.wait(0.05)
+					continue
+				end
 			end
 
 			if not wavesMode and isColossalRaid then
@@ -2176,8 +2242,9 @@ function AutoFarm:Start()
 				if not KiraTitanAlive(titanModel) then continue end
 				local tName = titanModel.Name
 				local isBoss = getgenv().KiraHub.Data.BossNames[tName]
-				if not wavesMode and isArmoredRaid and not hasReinerObjective and tName == "Armored_Titan" then continue end
-				if not wavesMode and isBoss and not titanModel:GetAttribute("State") then continue end
+				-- Raid / wave bosses are always eligible targets now. The old
+				-- "no State attribute" and Armored-raid guards silently skipped
+				-- the raid boss, so the script only ever fought adds.
 				local isRoaring = not wavesMode and isBoss and (
 					titanModel:GetAttribute("Attack") == "Roar"
 					or titanModel:GetAttribute("Attack") == "Berserk_Mode"
@@ -2189,7 +2256,7 @@ function AutoFarm:Start()
 				local adjustedDist = d
 				if getgenv().KiraHub.State.TargetNape == nape then adjustedDist = adjustedDist - 15000 end
 				if useRangeLimit and d > 90000 then continue end
-				if not wavesMode and isBoss then
+				if isBoss then
 					-- Always register on the nape, never on Marker/other body parts.
 					local hitPart = KiraNape(titanModel)
 					if hitPart and adjustedDist < bossDist then
@@ -2219,7 +2286,10 @@ function AutoFarm:Start()
 			local targetPart, targetIsRoaring = nil, false
 
 			if wavesMode then
-				targetPart = closestNape
+				-- Waves: bosses first. Previously this always took the nearest
+				-- add, so a wave boss was never touched while adds were alive.
+				targetPart = bossHitPoint or closestNape
+				targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
 			elseif isRaidMap then
 				if isFemaleRaid then
 					-- Female raid: only Female / Attack titans exist. Take the
@@ -2406,30 +2476,26 @@ function AutoFarm:Start()
 					end
 
 					if isBlades then
-						local thisBoss = IsBossTarget(targetPart)
-						local damageMult = math.clamp(math.floor(tonumber(GetOption("DamageMultiplierSlider", 1)) or 1), 1, 10)
-						local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 35)) or 35), 1, 60)
-						local userHits = 1
-						if IsToggled("BladeMultiHitToggle") then
-							userHits = math.clamp(math.floor(tonumber(GetOption("BladeMultiHitSlider", 1)) or 1), 1, 30)
+						-- SH-style blade swing: ONE Slash per 1.05s window, then
+						-- the hit requests. Extra Slash calls burn blade
+						-- durability and the server drops the swing, which is
+						-- exactly why the blades stopped attacking.
+						local hits = math.clamp(math.floor(tonumber(GetOption("HitRequestSlider", 1)) or 1), 1, 30)
+						if IsBossTarget(targetPart) then
+							-- Bosses keep their tuned loop count; the shared
+							-- slider can only raise it, never lower it.
+							local damageMult = math.clamp(math.floor(tonumber(GetOption("DamageMultiplierSlider", 1)) or 1), 1, 10)
+							local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 35)) or 35), 1, 60)
+							hits = math.max(hits, bossHits * damageMult)
 						end
-						-- Bosses keep their own (higher) loop count. The user's
-						-- multi-hit slider can raise it further, never lower it.
-						local baseHits = thisBoss and math.max(bossHits, userHits) or userHits
-						local bladeLoops = math.clamp(math.floor(baseHits * damageMult), 1, 60)
-						-- Each loop sends 1 Slash + 1 Register per nape. Keep the
-						-- burst inside KiraNet's queue so nothing is dropped.
-						local maxLoops = math.floor(700 / (2 * math.max(#hitTargets, 1)))
-						if bladeLoops > maxLoops then bladeLoops = math.max(1, maxLoops) end
+						-- Stay inside KiraNet's queue budget so nothing is dropped.
+						local maxHits = math.max(1, math.floor(700 / math.max(#hitTargets, 1)))
+						if hits > maxHits then hits = maxHits end
 
-						-- Slash + Register per nape (the blade swing must exist
-						-- before the server accepts the hitbox registration).
-						-- Everything is queued through KiraNet so bursts are not
-						-- rate-limit dropped.
-						for _ = 1, bladeLoops do
+						KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+						for _ = 1, hits do
 							for _, nape in ipairs(hitTargets) do
 								if nape and nape.Parent then
-									KiraNet:Fire(postRemote, "Attacks", "Slash", true)
 									KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
 								end
 							end
@@ -2443,10 +2509,7 @@ function AutoFarm:Start()
 							local spearId = KiraPickSpearId()
 							local isBoss = IsBossTarget(targetPart)
 							local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 35)) or 35), 1, 60)
-							local userHits = 1
-							if IsToggled("TSMultiHitToggle") then
-								userHits = math.clamp(math.floor(tonumber(GetOption("TSMultiHitSlider", 1)) or 1), 1, 30)
-							end
+							local userHits = math.clamp(math.floor(tonumber(GetOption("HitRequestSlider", 1)) or 1), 1, 30)
 							local baseHits = isBoss and math.max(bossHits, userHits) or userHits
 							local loops = math.clamp(math.floor(baseHits), 1, 60)
 							-- Each loop sends 1 explosion per nape; stay inside
@@ -2720,9 +2783,8 @@ task.spawn(function()
 end)
 
 function ForceRetry(force)
-	-- Always retry through the remotes. Never click the Rewards GUI buttons:
-	-- the button can appear while the server is still in the post-match state,
-	-- and a GUI click then silently does nothing.
+	-- Force Retry is the remote path: it deliberately never clicks the Rewards
+	-- GUI. (Auto Retry is the opposite - GUI click only, no remotes.)
 	local state = getgenv().KiraHub and getgenv().KiraHub.State
 	local now = os.clock()
 	if state and not force then
@@ -2783,11 +2845,9 @@ function ExecuteImmediateAutomation()
 	end
 
 	if IsToggled("AutoRetryToggle") then
-		local rewardsGui = INTERFACE:FindFirstChild("Rewards")
-		if rewardsGui and rewardsGui.Visible then
-			-- Remote-only retry (never a GUI click).
-			ForceRetry()
-		end
+		-- GUI click only: Auto Retry presses the Rewards screen's RETRY
+		-- button and never fires the retry remotes.
+		KiraClickRewardsRetry()
 	end
 end
 
@@ -3048,8 +3108,12 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Separate mission / raid farm priorities")
 	I_Upd:AddLabel("[+] Nape-only hits, 1.05s slash sync")
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
-	I_Upd:AddLabel("[+] Blade farm rebuilt, remote-only retry")
-	I_Upd:AddLabel("[+] Blades & Spears multi-hit sliders")
+	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
+	I_Upd:AddLabel("[+] Shared multi-hit slider (Blades & Spears)")
+	I_Upd:AddLabel("[+] Blades back to 1.05s slash sync")
+	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
+	I_Upd:AddLabel("[+] Auto Retry clicks RETRY, Force Retry uses remotes")
+	I_Upd:AddLabel("[+] UI font: Fantasy")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -3197,7 +3261,11 @@ function BuildFarmTab(TabRef)
 	})
 	Toggles.ManualAutoAttackToggle:OnChanged(function() MarkDirty() end)
 
-	F_Auto:AddToggle("AutoRetryToggle", {Text = "Auto Retry", Default = false})
+	F_Auto:AddToggle("AutoRetryToggle", {
+		Text = "Auto Retry",
+		Default = false,
+		Tooltip = "Clicks the Rewards screen RETRY button (GUI click, no remotes)."
+	})
 	Toggles.AutoRetryToggle:OnChanged(function() MarkDirty() end)
 
 	F_Auto:AddToggle("RetryFailedAltToggle", {
@@ -3468,53 +3536,17 @@ function BuildUtilityTab(TabRef)
 
 	U_Combat:AddDivider()
 
-	U_Combat:AddToggle("BladeMultiHitToggle", {
-		Text = "Blades Multi-Hit",
-		Default = false,
-		Tooltip = "Extra slash + hitbox registrations each cycle while farming with Blades."
-	})
-	Toggles.BladeMultiHitToggle:OnChanged(function()
-		-- Turning it on with a vanilla loop count does nothing visible, so
-		-- bump the slider to a useful starting value the first time.
-		if Toggles.BladeMultiHitToggle.Value then
-			local cur = tonumber(Options.BladeMultiHitSlider.Value) or 1
-			if cur < 2 then pcall(function() Options.BladeMultiHitSlider:SetValue(5) end) end
-		end
-		MarkDirty()
-	end)
-
-	U_Combat:AddSlider("BladeMultiHitSlider", {
-		Text = "Blades hit loops",
+	-- One shared multi-hit control for BOTH weapons. Blades and Thunder Spears
+	-- read the same value every 1.05s swing, so there is nothing to sync.
+	U_Combat:AddSlider("HitRequestSlider", {
+		Text = "Multi Hits (Blades & Spears)",
 		Default = 1,
 		Min = 1,
 		Max = 30,
 		Rounding = 0,
-		Tooltip = "Hits per nape per attack cycle with Blades. 1 = vanilla speed."
+		Tooltip = "Hit requests per nape per 1.05s swing. Drives both Blades and Thunder Spears. 1 = vanilla."
 	})
-	Options.BladeMultiHitSlider:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddToggle("TSMultiHitToggle", {
-		Text = "Spears Multi-Hit",
-		Default = false,
-		Tooltip = "Extra thunder spear explosion bursts each cycle while farming with Spears."
-	})
-	Toggles.TSMultiHitToggle:OnChanged(function()
-		if Toggles.TSMultiHitToggle.Value then
-			local cur = tonumber(Options.TSMultiHitSlider.Value) or 1
-			if cur < 2 then pcall(function() Options.TSMultiHitSlider:SetValue(3) end) end
-		end
-		MarkDirty()
-	end)
-
-	U_Combat:AddSlider("TSMultiHitSlider", {
-		Text = "Spears hit loops",
-		Default = 1,
-		Min = 1,
-		Max = 30,
-		Rounding = 0,
-		Tooltip = "Explosion bursts per nape per attack cycle with Spears. 1 = vanilla speed."
-	})
-	Options.TSMultiHitSlider:OnChanged(function() MarkDirty() end)
+	Options.HitRequestSlider:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
@@ -3558,7 +3590,7 @@ function BuildUtilityTab(TabRef)
 		Min = 1,
 		Max = 10,
 		Rounding = 0,
-		Tooltip = "Extra Blades hit loops per attack cycle (stacks with the Blades slider)."
+		Tooltip = "Multiplies the boss hit-request count (stacks with Multi Hits)."
 	})
 	Options.DamageMultiplierSlider:OnChanged(function() MarkDirty() end)
 
@@ -5525,13 +5557,16 @@ pcall(function()
 		AccentColor = Color3.fromRGB(255, 185, 50),
 		BackgroundColor = Color3.fromRGB(22, 22, 22),
 		OutlineColor = Color3.fromRGB(52, 52, 52),
-		FontFace = "Jura", Enum.FontWeight.Medium
+		FontFace = Enum.Font.Fantasy
 	})
 end)
 
 pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
 pcall(function() ThemeManager:LoadDefault() end)
 pcall(function() SaveManager:LoadAutoloadConfig() end)
+-- UI font: Fantasy. Obsidian's SetFont takes a Font enum and re-applies it to
+-- every label/button already in its registry.
+pcall(function() Library:SetFont(Enum.Font.Fantasy) end)
 pcall(function()
 	if getgenv().KiraHub.LoadKeybinds then getgenv().KiraHub.LoadKeybinds() end
 end)
@@ -6559,7 +6594,7 @@ function KiraFamilyNotify(name, tier)
 		title.Position = UDim2.new(0, 22, 0, 7)
 		title.BackgroundTransparency = 1
 		title.TextColor3 = Color3.fromRGB(80, 220, 150)
-		title.Font = Enum.Font.GothamBold
+		title.Font = Enum.Font.Fantasy
 		title.TextSize = 14
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		title.Parent = frame
@@ -6570,7 +6605,7 @@ function KiraFamilyNotify(name, tier)
 		sub.Position = UDim2.new(0, 22, 0, 27)
 		sub.BackgroundTransparency = 1
 		sub.TextColor3 = Color3.fromRGB(245, 240, 255)
-		sub.Font = Enum.Font.GothamMedium
+		sub.Font = Enum.Font.Fantasy
 		sub.TextSize = 12
 		sub.TextXAlignment = Enum.TextXAlignment.Left
 		sub.Parent = frame
@@ -7588,9 +7623,13 @@ function ExecuteAutoSelectSlot()
 	state.AutoSlotBusy = false
 	state.SlotSelectDone = true
 	if ok and result then
+		-- Let the slot click settle for 1s before asking the server for the
+		-- lobby (was 2s - the slot register is already confirmed by now).
+		task.wait(1)
 		KiraTeleportLobby(("Slot %s selected - teleporting to lobby..."):format(letter))
 	elseif ok and state.SlotSelectClicked then
 		-- Clicked twice and the screen is still up: force the lobby remote.
+		task.wait(1)
 		KiraTeleportLobby(("Slot %s not ready - forcing lobby teleport..."):format(letter))
 	else
 		state.SlotSelectDone = false
@@ -8307,8 +8346,8 @@ function SaveAllStates()
 			sliders = {},
 			dropdowns = {},
 			theme = {
-				FontFace = "Jura",
-				FontWeight = "Medium"
+				FontFace = "Fantasy",
+				FontWeight = "Regular"
 			},			
 			inputs = {},
 			_version = "v3"
