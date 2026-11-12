@@ -2408,8 +2408,19 @@ function AutoFarm:Start()
 					if isBlades then
 						local thisBoss = IsBossTarget(targetPart)
 						local damageMult = math.clamp(math.floor(tonumber(GetOption("DamageMultiplierSlider", 1)) or 1), 1, 10)
-						local bossHits = tonumber(GetOption("BladeBossHitsSlider", 35)) or 35
-						local bladeLoops = math.max(1, math.floor((thisBoss and bossHits or 1) * damageMult))
+						local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 35)) or 35), 1, 60)
+						local userHits = 1
+						if IsToggled("BladeMultiHitToggle") then
+							userHits = math.clamp(math.floor(tonumber(GetOption("BladeMultiHitSlider", 1)) or 1), 1, 30)
+						end
+						-- Bosses keep their own (higher) loop count. The user's
+						-- multi-hit slider can raise it further, never lower it.
+						local baseHits = thisBoss and math.max(bossHits, userHits) or userHits
+						local bladeLoops = math.clamp(math.floor(baseHits * damageMult), 1, 60)
+						-- Each loop sends 1 Slash + 1 Register per nape. Keep the
+						-- burst inside KiraNet's queue so nothing is dropped.
+						local maxLoops = math.floor(700 / (2 * math.max(#hitTargets, 1)))
+						if bladeLoops > maxLoops then bladeLoops = math.max(1, maxLoops) end
 
 						-- Slash + Register per nape (the blade swing must exist
 						-- before the server accepts the hitbox registration).
@@ -2431,8 +2442,17 @@ function AutoFarm:Start()
 							KiraRefreshSpearMarks()
 							local spearId = KiraPickSpearId()
 							local isBoss = IsBossTarget(targetPart)
-							local bossHits = tonumber(GetOption("BladeBossHitsSlider", 35)) or 35
-							local loops = math.max(1, math.floor(isBoss and bossHits or 1))
+							local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 35)) or 35), 1, 60)
+							local userHits = 1
+							if IsToggled("TSMultiHitToggle") then
+								userHits = math.clamp(math.floor(tonumber(GetOption("TSMultiHitSlider", 1)) or 1), 1, 30)
+							end
+							local baseHits = isBoss and math.max(bossHits, userHits) or userHits
+							local loops = math.clamp(math.floor(baseHits), 1, 60)
+							-- Each loop sends 1 explosion per nape; stay inside
+							-- KiraNet's queue so nothing is dropped.
+							local maxLoops = math.floor(700 / math.max(#hitTargets, 1))
+							if loops > maxLoops then loops = math.max(1, maxLoops) end
 							task.spawn(function()
 								local function unusedSpears()
 									local n = 0
@@ -3029,6 +3049,7 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Nape-only hits, 1.05s slash sync")
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
 	I_Upd:AddLabel("[+] Blade farm rebuilt, remote-only retry")
+	I_Upd:AddLabel("[+] Blades & Spears multi-hit sliders")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -3428,17 +3449,72 @@ function BuildUtilityTab(TabRef)
 	U_Combat:AddToggle("AutoEscapeToggle", {Text = "Auto Escape Grab", Default = false})
 	Toggles.AutoEscapeToggle:OnChanged(function() MarkDirty() end)
 
-	U_Combat:AddToggle("MultiHitToggle", {Text = "Multi Hit", Default = false})
+	U_Combat:AddToggle("MultiHitToggle", {
+		Text = "Multi Hit (Napes)",
+		Default = false,
+		Tooltip = "Lets one attack cycle hit more than one nape at once."
+	})
 	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("MultiHitCountSlider", {
-		Text = "Hit Count",
+		Text = "Napes per hit",
 		Default = 3,
 		Min = 2,
 		Max = 20,
-		Rounding = 0
+		Rounding = 0,
+		Tooltip = "How many napes a single attack cycle may hit."
 	})
 	Options.MultiHitCountSlider:OnChanged(function() MarkDirty() end)
+
+	U_Combat:AddDivider()
+
+	U_Combat:AddToggle("BladeMultiHitToggle", {
+		Text = "Blades Multi-Hit",
+		Default = false,
+		Tooltip = "Extra slash + hitbox registrations each cycle while farming with Blades."
+	})
+	Toggles.BladeMultiHitToggle:OnChanged(function()
+		-- Turning it on with a vanilla loop count does nothing visible, so
+		-- bump the slider to a useful starting value the first time.
+		if Toggles.BladeMultiHitToggle.Value then
+			local cur = tonumber(Options.BladeMultiHitSlider.Value) or 1
+			if cur < 2 then pcall(function() Options.BladeMultiHitSlider:SetValue(5) end) end
+		end
+		MarkDirty()
+	end)
+
+	U_Combat:AddSlider("BladeMultiHitSlider", {
+		Text = "Blades hit loops",
+		Default = 1,
+		Min = 1,
+		Max = 30,
+		Rounding = 0,
+		Tooltip = "Hits per nape per attack cycle with Blades. 1 = vanilla speed."
+	})
+	Options.BladeMultiHitSlider:OnChanged(function() MarkDirty() end)
+
+	U_Combat:AddToggle("TSMultiHitToggle", {
+		Text = "Spears Multi-Hit",
+		Default = false,
+		Tooltip = "Extra thunder spear explosion bursts each cycle while farming with Spears."
+	})
+	Toggles.TSMultiHitToggle:OnChanged(function()
+		if Toggles.TSMultiHitToggle.Value then
+			local cur = tonumber(Options.TSMultiHitSlider.Value) or 1
+			if cur < 2 then pcall(function() Options.TSMultiHitSlider:SetValue(3) end) end
+		end
+		MarkDirty()
+	end)
+
+	U_Combat:AddSlider("TSMultiHitSlider", {
+		Text = "Spears hit loops",
+		Default = 1,
+		Min = 1,
+		Max = 30,
+		Rounding = 0,
+		Tooltip = "Explosion bursts per nape per attack cycle with Spears. 1 = vanilla speed."
+	})
+	Options.TSMultiHitSlider:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
@@ -3482,7 +3558,7 @@ function BuildUtilityTab(TabRef)
 		Min = 1,
 		Max = 10,
 		Rounding = 0,
-		Tooltip = "Multiplies boss hit loops (Kira-style hit spam)."
+		Tooltip = "Extra Blades hit loops per attack cycle (stacks with the Blades slider)."
 	})
 	Options.DamageMultiplierSlider:OnChanged(function() MarkDirty() end)
 
