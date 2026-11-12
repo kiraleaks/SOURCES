@@ -1290,13 +1290,15 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- Slash + hit request sync: both are sent together once per interval.
+-- Multi Hit shortens the window to SH's cadence (0.4s blades / 0.6s spears).
 KiraSlashInterval = 1.05
-function KiraSlashGate(now)
+function KiraSlashGate(now, interval)
 	local st = getgenv().KiraHub and getgenv().KiraHub.State
 	if not st then return false end
 	now = now or os.clock()
+	interval = interval or KiraSlashInterval
 	local last = st.LastSlashAt or 0
-	if now - last >= KiraSlashInterval then
+	if now - last >= interval then
 		st.LastSlashAt = now
 		return true
 	end
@@ -1304,13 +1306,15 @@ function KiraSlashGate(now)
 end
 
 -- ============================================================================
---  Blade farm (same shape as the SH farm)
+--  Blade farm
 --
---  Safe mode (Multi Hit OFF): one nape, one Slash + one hit request per swing.
---  Multi Hit ON: up to "Napes per swing" napes (nearest first), and each nape
---  gets "Hits per nape" Slash + hit request pairs -- SH fires the pair inside
---  the loop, not one Slash followed by N registers.
---  Raids, missions and waves all go through this same path.
+--  Multi Hit OFF: one nape, one Slash + one hit request per 1.05s swing
+--  (bosses keep their Blade Boss Hits loop). Safe, current behaviour.
+--
+--  Multi Hit ON: the SH blade farm -- the main nape plus every other live
+--  nape, nearest first, capped at defaultThunderTargets() = 20, one
+--  Slash + Register pair per nape per 0.4s. Raids, missions and waves all
+--  use this same path.
 -- ============================================================================
 function KiraMultiHitEnabled()
 	return IsToggled("MultiHitToggle") == true
@@ -1322,9 +1326,8 @@ function KiraBladeTargets(targetPart, validNapes)
 	list[1] = targetPart
 	if not KiraMultiHitEnabled() then return list end
 
-	local want = math.clamp(math.floor(tonumber(GetOption("MultiHitNapesSlider", 10)) or 10), 1, 20)
-	if want <= 1 then return list end
-
+	-- SH defaultThunderTargets() is 20; the blade list is that many napes.
+	local want = 20
 	local candidates = {}
 	for _, n in ipairs(validNapes or {}) do
 		if n ~= targetPart and n and n.Parent then
@@ -1351,18 +1354,16 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 	local list = KiraBladeTargets(targetPart, validNapes)
 	if #list == 0 then return 0 end
 
-	local hitsPer = 1
-	if KiraMultiHitEnabled() then
-		hitsPer = math.clamp(math.floor(tonumber(GetOption("MultiHitCountSlider", 10)) or 10), 1, 30)
-	end
 	local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
 
 	-- KiraNet's queue holds 800 events; stop well before it overflows.
 	local sent = 0
 	for _, nape in ipairs(list) do
 		if nape and nape.Parent then
-			local hits = hitsPer
-			if isBoss then hits = math.max(hits, bossHits) end
+			-- SH sends one Slash + Register per nape. Bosses additionally get
+			-- the tuned Blade Boss Hits loop so raids still finish.
+			local hits = 1
+			if isBoss then hits = math.max(1, bossHits) end
 			for _ = 1, hits do
 				if sent >= 700 then break end
 				if nape.Parent then
@@ -2586,21 +2587,39 @@ function AutoFarm:Start()
 				if (dx * dx + dz * dz) <= AttackRangeSq then
 					local isBoss = IsBossTarget(targetPart)
 					if useBlades then
-						if bladesReady and KiraSlashGate(now) then
+						if bladesReady and KiraSlashGate(now, KiraMultiHitEnabled() and 0.4 or nil) then
 							KiraBladeAttack(targetPart, holdNapes, isBoss)
 						end
-					elseif KiraSlashGate(now) then
+					elseif KiraSlashGate(now, KiraMultiHitEnabled() and 0.6 or nil) then
 						-- Thunder spears: S_Fire expects a spear SLOT id (1..8),
 						-- never the remaining ammo count. One spear + its
 						-- explosion(s) per cycle, exactly like the old build.
 						if spearAmmo > 0 then
 							KiraRefreshSpearMarks()
 							local spearId = KiraPickSpearId()
-							local loops = 1
-							if isBoss then
-								loops = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+							local multi = KiraMultiHitEnabled()
+							local multiTargets
+							local reps = 1
+							if multi then
+								-- SH thunder farm: every live nape counts, and the
+								-- explosion count comes from acquireTokens() -- a
+								-- 150 events/s budget capped at 10 per target.
+								multiTargets = {}
+								for _, n in ipairs(holdNapes) do
+									if n and n.Parent then
+										multiTargets[#multiTargets + 1] = {part = n, pos = n.Position}
+									end
+								end
+								if #multiTargets == 0 then
+									multiTargets[1] = {part = targetPart, pos = targetPart.Position}
+								end
+								reps = math.max(1, math.min(10, math.floor(150 / math.max(#multiTargets, 1))))
+							else
+								if isBoss then
+									reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+								end
+								multiTargets = {{part = targetPart, pos = targetPart.Position}}
 							end
-							local napePosition = targetPart.Position
 							task.spawn(function()
 								local function unusedSpears()
 									local n = 0
@@ -2611,23 +2630,44 @@ function AutoFarm:Start()
 								end
 								local beforeUnused = unusedSpears()
 								local beforeAmmo = KiraSpearsLeft()
-								pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
-								-- Explode immediately; the old build did not wait
-								-- for the fire remote before sending the hitbox.
-								for _ = 1, loops do
-									if targetPart and targetPart.Parent then
-										KiraNet:Fire(postRemote, "Spears", "S_Explode", napePosition, 0.10 + math.random() * 0.09)
+								local okFire = pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
+								if multi and okFire then
+									-- SH verifies the spear actually left the slot
+									-- before exploding; a refused shot never explodes.
+									local deadline = os.clock() + 1.0
+									local after = KiraSpearsLeft()
+									while beforeAmmo ~= nil and after ~= nil and after >= beforeAmmo
+										and os.clock() < deadline do
+										task.wait()
+										after = KiraSpearsLeft()
+									end
+									if beforeAmmo ~= nil and after ~= nil and after >= beforeAmmo then
+										table.clear(kiraUsedSpearIds)
+										getgenv().KiraHub.State.ForceSpearReset = true
+										KiraRefreshSpearMarks()
+										getgenv().KiraHub.State.RefillRequest = "Spears"
+										return
 									end
 								end
-								task.wait(0.5)
-								if KiraSpearsLeft() == beforeAmmo and unusedSpears() >= beforeUnused then
-									-- The server refused the shot (the "stuck at 1/12"
-									-- bug). Free every slot mark and force a real
-									-- station refill instead of retrying this id.
-									table.clear(kiraUsedSpearIds)
-									getgenv().KiraHub.State.ForceSpearReset = true
-									KiraRefreshSpearMarks()
-									getgenv().KiraHub.State.RefillRequest = "Spears"
+								if not okFire then return end
+								for _ = 1, reps do
+									for _, t in ipairs(multiTargets) do
+										if t.part and t.part.Parent then
+											KiraNet:Fire(postRemote, "Spears", "S_Explode", t.pos, 0.10 + math.random() * 0.09)
+										end
+									end
+								end
+								if not multi then
+									task.wait(0.5)
+									if KiraSpearsLeft() == beforeAmmo and unusedSpears() >= beforeUnused then
+										-- The server refused the shot (the "stuck at
+										-- 1/12" bug). Free every slot mark and force
+										-- a real station refill instead of retrying.
+										table.clear(kiraUsedSpearIds)
+										getgenv().KiraHub.State.ForceSpearReset = true
+										KiraRefreshSpearMarks()
+										getgenv().KiraHub.State.RefillRequest = "Spears"
+									end
 								end
 							end)
 						else
@@ -2812,25 +2852,51 @@ task.spawn(function()
 				end
 			end
 		end
-		if closestNape and KiraSlashGate() then
-			-- Weapon-aware manual attack: spears fire a real spear slot,
-			-- blades swing once (plus the boss loop). No multi-hit controls.
+		if closestNape and KiraSlashGate(nil, KiraMultiHitEnabled() and 0.4 or nil) then
+			-- Weapon-aware manual attack. Multi Hit ON follows the SH farm:
+			-- blades cover every nearby nape, spears explode every nearby nape.
 			local weapon = GetCurrentWeapon() or KiraWeaponInfo()
 			local isBoss = IsBossTarget(closestNape)
 			if weapon == "Spears" then
 				local ammo = KiraSpearsLeft() or 0
 				if ammo > 0 then
 					local spearId = KiraPickSpearId()
-					local napePos = closestNape.Position
-					task.spawn(function()
-						pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
-						local loops = 1
-						if isBoss then
-							loops = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+					local multi = KiraMultiHitEnabled()
+					local targets = {}
+					if multi then
+						for _, n in ipairs(nearbyNapes) do
+							if n and n.Parent then
+								targets[#targets + 1] = {part = n, pos = n.Position}
+							end
 						end
-						for _ = 1, loops do
-							if closestNape and closestNape.Parent then
-								KiraNet:Fire(postRemote, "Spears", "S_Explode", napePos, 0.10 + math.random() * 0.09)
+					end
+					if #targets == 0 then
+						targets[1] = {part = closestNape, pos = closestNape.Position}
+					end
+					local reps = 1
+					if multi then
+						reps = math.max(1, math.min(10, math.floor(150 / math.max(#targets, 1))))
+					elseif isBoss then
+						reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+					end
+					task.spawn(function()
+						local beforeAmmo = KiraSpearsLeft()
+						local okFire = pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
+						if not okFire then return end
+						if multi and beforeAmmo ~= nil then
+							local deadline = os.clock() + 1.0
+							local after = KiraSpearsLeft()
+							while after ~= nil and after >= beforeAmmo and os.clock() < deadline do
+								task.wait()
+								after = KiraSpearsLeft()
+							end
+							if after ~= nil and after >= beforeAmmo then return end
+						end
+						for _ = 1, reps do
+							for _, t in ipairs(targets) do
+								if t.part and t.part.Parent then
+									KiraNet:Fire(postRemote, "Spears", "S_Explode", t.pos, 0.10 + math.random() * 0.09)
+								end
 							end
 						end
 					end)
@@ -3224,7 +3290,7 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Nape-only hits, 1.05s slash sync")
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
 	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
-	I_Upd:AddLabel("[+] Multi Hit toggle (SH blade farm) + safe farm default")
+	I_Upd:AddLabel("[+] Multi Hit (Risky) = exact SH blades/TS farm")
 	I_Upd:AddLabel("[+] Blades/Spears weapon detection hardened")
 	I_Upd:AddLabel("[+] Jura font locked (configs cannot change it)")
 	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
@@ -3633,34 +3699,14 @@ function BuildUtilityTab(TabRef)
 	U_Combat:AddToggle("AutoEscapeToggle", {Text = "Auto Escape Grab", Default = false})
 	Toggles.AutoEscapeToggle:OnChanged(function() MarkDirty() end)
 
-	-- Multi Hit: SH blade farm behaviour (several napes, N hit pairs each).
-	-- OFF keeps the normal safe farm: one nape, one Slash + one hit request.
+	-- Multi Hit: exact SH farm behaviour for blades and thunder spears.
+	-- OFF keeps the normal safe farm (one nape, one hit request per swing).
 	U_Combat:AddToggle("MultiHitToggle", {
-		Text = "Multi Hit",
+		Text = "Multi Hit (Risky)",
 		Default = false,
-		Tooltip = "ON = SH-style blade farm (multi nape + multi hit). OFF = normal safe farm."
+		Tooltip = "ON = SH farm: blades hit every nape per swing and spears explode every nape. Higher ban risk. OFF = normal safe farm."
 	})
 	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddSlider("MultiHitCountSlider", {
-		Text = "Hits per nape",
-		Default = 10,
-		Min = 1,
-		Max = 30,
-		Rounding = 0,
-		Tooltip = "Slash + hit request pairs per nape, per swing (SH uses 10)."
-	})
-	Options.MultiHitCountSlider:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddSlider("MultiHitNapesSlider", {
-		Text = "Napes per swing",
-		Default = 10,
-		Min = 1,
-		Max = 20,
-		Rounding = 0,
-		Tooltip = "How many napes one swing covers, nearest first (SH uses up to 10)."
-	})
-	Options.MultiHitNapesSlider:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
