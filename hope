@@ -1303,6 +1303,80 @@ function KiraSlashGate(now)
 	return false
 end
 
+-- ============================================================================
+--  Blade farm (same shape as the SH farm)
+--
+--  Safe mode (Multi Hit OFF): one nape, one Slash + one hit request per swing.
+--  Multi Hit ON: up to "Napes per swing" napes (nearest first), and each nape
+--  gets "Hits per nape" Slash + hit request pairs -- SH fires the pair inside
+--  the loop, not one Slash followed by N registers.
+--  Raids, missions and waves all go through this same path.
+-- ============================================================================
+function KiraMultiHitEnabled()
+	return IsToggled("MultiHitToggle") == true
+end
+
+function KiraBladeTargets(targetPart, validNapes)
+	local list = {}
+	if not (targetPart and targetPart.Parent) then return list end
+	list[1] = targetPart
+	if not KiraMultiHitEnabled() then return list end
+
+	local want = math.clamp(math.floor(tonumber(GetOption("MultiHitNapesSlider", 10)) or 10), 1, 20)
+	if want <= 1 then return list end
+
+	local candidates = {}
+	for _, n in ipairs(validNapes or {}) do
+		if n ~= targetPart and n and n.Parent then
+			if KiraTitanAlive(KiraNapeModel(n)) then
+				candidates[#candidates + 1] = {
+					part = n,
+					d = (n.Position - targetPart.Position).Magnitude
+				}
+			end
+		end
+	end
+	table.sort(candidates, function(a, b) return a.d < b.d end)
+	for _, c in ipairs(candidates) do
+		if #list >= want then break end
+		list[#list + 1] = c.part
+	end
+	return list
+end
+
+function KiraBladeAttack(targetPart, validNapes, isBoss)
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return 0 end
+
+	local list = KiraBladeTargets(targetPart, validNapes)
+	if #list == 0 then return 0 end
+
+	local hitsPer = 1
+	if KiraMultiHitEnabled() then
+		hitsPer = math.clamp(math.floor(tonumber(GetOption("MultiHitCountSlider", 10)) or 10), 1, 30)
+	end
+	local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+
+	-- KiraNet's queue holds 800 events; stop well before it overflows.
+	local sent = 0
+	for _, nape in ipairs(list) do
+		if nape and nape.Parent then
+			local hits = hitsPer
+			if isBoss then hits = math.max(hits, bossHits) end
+			for _ = 1, hits do
+				if sent >= 700 then break end
+				if nape.Parent then
+					KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+					KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
+				end
+				sent = sent + 2
+			end
+		end
+		if sent >= 700 then break end
+	end
+	return sent
+end
+
 
 function KiraPressPrompt(prompt)
 	if not prompt then return false end
@@ -1594,7 +1668,7 @@ function UpdateTitanESP()
 						local label = Instance.new("TextLabel")
 						label.Size = UDim2.new(1, 0, 1, 0)
 						label.BackgroundTransparency = 1
-						label.Font = Enum.Font.Fantasy
+						label.Font = Enum.Font.Jura
 						label.TextSize = 14
 						label.TextColor3 = Color3.fromRGB(255, 255, 255)
 						label.TextStrokeTransparency = 0.3
@@ -2506,28 +2580,14 @@ function AutoFarm:Start()
 				-- above the titan waiting for a refill that is not needed.
 				local useBlades = isBlades or (spearAmmo <= 0 and canFallbackBlades)
 
-				-- One attack per 1.05s window on the committed nape. No multi-hit
-				-- controls: this is the pre-experiment behaviour that actually
-				-- swung the blades and fired the spears. Bosses keep their tuned
-				-- hit-loop count, adds take a single hit request.
+				-- One attack per 1.05s window on the committed nape. Blade swings
+				-- follow the SH farm: safe mode is 1 nape / 1 hit request, and
+				-- Multi Hit fans out over several napes with N pairs per nape.
 				if (dx * dx + dz * dz) <= AttackRangeSq then
 					local isBoss = IsBossTarget(targetPart)
 					if useBlades then
 						if bladesReady and KiraSlashGate(now) then
-							-- SH-style blade swing: ONE Slash, then the hit
-							-- requests. Extra Slash calls burn durability and the
-							-- server drops the swing, which is exactly why the
-							-- blades stopped attacking.
-							local hits = 1
-							if isBoss then
-								hits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
-							end
-							KiraNet:Fire(postRemote, "Attacks", "Slash", true)
-							for _ = 1, hits do
-								if targetPart and targetPart.Parent then
-									KiraNet:Fire(postRemote, "Hitboxes", "Register", targetPart, math.random(700, 900))
-								end
-							end
+							KiraBladeAttack(targetPart, holdNapes, isBoss)
 						end
 					elseif KiraSlashGate(now) then
 						-- Thunder spears: S_Fire expects a spear SLOT id (1..8),
@@ -2741,11 +2801,13 @@ task.spawn(function()
 		local tf = workspace:FindFirstChild("Titans")
 		if not tf then continue end
 		local closestNape, closestDist = nil, 40
+		local nearbyNapes = {}
 		for _, t in ipairs(tf:GetChildren()) do
 			if t:IsA("Model") and KiraTitanAlive(t) then
 				local nape = KiraNape(t)
 				if nape then
 					local dist = (hrp.Position - nape.Position).Magnitude
+					if dist < 250 then table.insert(nearbyNapes, nape) end
 					if dist < closestDist then closestDist = dist closestNape = nape end
 				end
 			end
@@ -2774,16 +2836,7 @@ task.spawn(function()
 					end)
 				end
 			else
-				local hits = 1
-				if isBoss then
-					hits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
-				end
-				KiraNet:Fire(postRemote, "Attacks", "Slash", true)
-				for _ = 1, hits do
-					if closestNape and closestNape.Parent then
-						KiraNet:Fire(postRemote, "Hitboxes", "Register", closestNape, math.random(700, 900))
-					end
-				end
+				KiraBladeAttack(closestNape, nearbyNapes, isBoss)
 			end
 		end
 	end
@@ -3171,12 +3224,12 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Nape-only hits, 1.05s slash sync")
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
 	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
-	I_Upd:AddLabel("[+] Attack loop restored (no multi-hit controls)")
+	I_Upd:AddLabel("[+] Multi Hit toggle (SH blade farm) + safe farm default")
 	I_Upd:AddLabel("[+] Blades/Spears weapon detection hardened")
-	I_Upd:AddLabel("[+] Fantasy font locked (configs cannot change it)")
+	I_Upd:AddLabel("[+] Jura font locked (configs cannot change it)")
 	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
 	I_Upd:AddLabel("[+] Auto Retry clicks RETRY, Force Retry uses remotes")
-	I_Upd:AddLabel("[+] UI font: Fantasy")
+	I_Upd:AddLabel("[+] UI font: Jura")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -3579,6 +3632,35 @@ function BuildUtilityTab(TabRef)
 
 	U_Combat:AddToggle("AutoEscapeToggle", {Text = "Auto Escape Grab", Default = false})
 	Toggles.AutoEscapeToggle:OnChanged(function() MarkDirty() end)
+
+	-- Multi Hit: SH blade farm behaviour (several napes, N hit pairs each).
+	-- OFF keeps the normal safe farm: one nape, one Slash + one hit request.
+	U_Combat:AddToggle("MultiHitToggle", {
+		Text = "Multi Hit",
+		Default = false,
+		Tooltip = "ON = SH-style blade farm (multi nape + multi hit). OFF = normal safe farm."
+	})
+	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
+
+	U_Combat:AddSlider("MultiHitCountSlider", {
+		Text = "Hits per nape",
+		Default = 10,
+		Min = 1,
+		Max = 30,
+		Rounding = 0,
+		Tooltip = "Slash + hit request pairs per nape, per swing (SH uses 10)."
+	})
+	Options.MultiHitCountSlider:OnChanged(function() MarkDirty() end)
+
+	U_Combat:AddSlider("MultiHitNapesSlider", {
+		Text = "Napes per swing",
+		Default = 10,
+		Min = 1,
+		Max = 20,
+		Rounding = 0,
+		Tooltip = "How many napes one swing covers, nearest first (SH uses up to 10)."
+	})
+	Options.MultiHitNapesSlider:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
@@ -4959,9 +5041,9 @@ function KiraApplyConfig(text)
 		end
 	end
 	MarkDirty()
-	-- A config can never change the font: re-assert Fantasy after applying.
+	-- A config can never change the font: re-assert Jura after applying.
 	pcall(function()
-		if Library and Library.SetFont then Library:SetFont(Enum.Font.Fantasy) end
+		if Library and Library.SetFont then Library:SetFont(Enum.Font.Jura) end
 	end)
 	return applied
 end
@@ -5580,27 +5662,27 @@ pcall(function()
 		AccentColor = Color3.fromRGB(255, 185, 50),
 		BackgroundColor = Color3.fromRGB(22, 22, 22),
 		OutlineColor = Color3.fromRGB(52, 52, 52),
-		FontFace = Enum.Font.Fantasy
+		FontFace = Enum.Font.Jura
 	})
 end)
 
 pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
 pcall(function() ThemeManager:LoadDefault() end)
 pcall(function() SaveManager:LoadAutoloadConfig() end)
--- UI font: Fantasy, permanently. Obsidian's SetFont takes a Font enum and
+-- UI font: Jura, permanently. Obsidian's SetFont takes a Font enum and
 -- re-applies it to every label/button already in its registry. Wrap it so any
--- saved theme / config that selects another face is coerced back to Fantasy
+-- saved theme / config that selects another face is coerced back to Jura
 -- instead of overriding it.
 do
 	local baseSetFont = Library and Library.SetFont
 	if type(baseSetFont) == "function" then
 		Library.SetFont = function(self, ...)
-			return baseSetFont(self, Enum.Font.Fantasy)
+			return baseSetFont(self, Enum.Font.Jura)
 		end
 	end
-	pcall(function() Library:SetFont(Enum.Font.Fantasy) end)
+	pcall(function() Library:SetFont(Enum.Font.Jura) end)
 	pcall(function()
-		Library.Scheme.Font = Font.fromEnum(Enum.Font.Fantasy)
+		Library.Scheme.Font = Font.fromEnum(Enum.Font.Jura)
 		Library:UpdateColorsUsingRegistry()
 	end)
 end
@@ -5609,7 +5691,7 @@ end
 task.spawn(function()
 	for _ = 1, 10 do
 		task.wait(1)
-		pcall(function() Library:SetFont(Enum.Font.Fantasy) end)
+		pcall(function() Library:SetFont(Enum.Font.Jura) end)
 	end
 end)
 pcall(function()
@@ -6639,7 +6721,7 @@ function KiraFamilyNotify(name, tier)
 		title.Position = UDim2.new(0, 22, 0, 7)
 		title.BackgroundTransparency = 1
 		title.TextColor3 = Color3.fromRGB(80, 220, 150)
-		title.Font = Enum.Font.Fantasy
+		title.Font = Enum.Font.Jura
 		title.TextSize = 14
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		title.Parent = frame
@@ -6650,7 +6732,7 @@ function KiraFamilyNotify(name, tier)
 		sub.Position = UDim2.new(0, 22, 0, 27)
 		sub.BackgroundTransparency = 1
 		sub.TextColor3 = Color3.fromRGB(245, 240, 255)
-		sub.Font = Enum.Font.Fantasy
+		sub.Font = Enum.Font.Jura
 		sub.TextSize = 12
 		sub.TextXAlignment = Enum.TextXAlignment.Left
 		sub.Parent = frame
@@ -8391,7 +8473,7 @@ function SaveAllStates()
 			sliders = {},
 			dropdowns = {},
 			theme = {
-				FontFace = "Fantasy",
+				FontFace = "Jura",
 				FontWeight = "Regular"
 			},			
 			inputs = {},
