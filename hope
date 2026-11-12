@@ -103,6 +103,8 @@ getgenv().KiraHub = {
 		LastSpearChangeAt = 0,
 		MissionTargetAt = 0,
 		BladeSettleUntil = 0,
+		MomentumNextAt = 0,
+		LastM1At = 0,
 		HoldSafeLeft = 0,
 		ForceSpearReset = false,
 		ShifterSkillsRunning = false,
@@ -1306,6 +1308,101 @@ function KiraSlashGate(now, interval)
 end
 
 -- ============================================================================
+--  Blade M1 + momentum
+--
+--  AOTR only registers blade hits on a real swing, so every blade attack also
+--  taps M1 (aimed at a viewport point no visible GUI covers, so it can never
+--  press a hub button). Blade damage scales with velocity, so while blades are
+--  out the farm keeps the character moving at 400+ studs/s around the titan
+--  instead of parking with zero speed.
+-- ============================================================================
+local kiraM1At = 0
+
+function KiraM1()
+	if not IsToggled("AutoM1Toggle") then return false end
+	local now = os.clock()
+	if now - kiraM1At < 0.08 then return false end
+	local okFocus, focused = pcall(function() return UserInputService:GetFocusedTextBox() end)
+	if okFocus and focused then return false end
+	kiraM1At = now
+
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	local points = {
+		Vector2.new(vp.X * 0.5, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.82, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.18, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.5, vp.Y * 0.8),
+	}
+	local gui = player:FindFirstChildOfClass("PlayerGui")
+	local point = points[1]
+	for _, c in ipairs(points) do
+		local blocked = false
+		if gui then
+			local ok, objs = pcall(function() return gui:GetGuiObjectsAtPosition(c.X, c.Y) end)
+			if ok and type(objs) == "table" then
+				for _, o in ipairs(objs) do
+					if o and o.Visible and o.AbsoluteSize.X > 0 and o.AbsoluteSize.Y > 0 then
+						blocked = true
+						break
+					end
+				end
+			end
+		end
+		if not blocked then
+			point = c
+			break
+		end
+	end
+
+	pcall(function()
+		VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+	end)
+	task.delay(0.04, function()
+		pcall(function()
+			VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+		end)
+	end)
+	return true
+end
+
+function KiraBladeMomentumSpeed()
+	local v = tonumber(GetOption("HoverSpeedSlider", 400)) or 400
+	return math.max(v, 400)
+end
+
+function KiraBladeMomentum(root, hoverPos, nape)
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not (root and hoverPos and st) then return end
+	local now = os.clock()
+	local speed = KiraBladeMomentumSpeed()
+	local aim = hoverPos
+	if nape and nape.Parent then
+		-- Rotate the aim point around the nape so the velocity vector keeps
+		-- changing direction (that is what builds momentum) while the
+		-- character stays well inside the horizontal attack ring.
+		local range = tonumber(GetOption("AttackRangeSlider", 150)) or 150
+		local radius = math.clamp(range * 0.45, 30, 120)
+		if now >= (st.MomentumNextAt or 0) then
+			st.MomentumNextAt = now + 0.35
+			st.OrbitAngle = ((st.OrbitAngle or 0) + 1.1) % (math.pi * 2)
+		end
+		local ang = st.OrbitAngle or 0
+		aim = Vector3.new(
+			nape.Position.X + math.cos(ang) * radius,
+			hoverPos.Y,
+			nape.Position.Z + math.sin(ang) * radius
+		)
+	end
+	local delta = aim - root.Position
+	local mag = delta.Magnitude
+	if mag < 0.5 then return end
+	root.AssemblyLinearVelocity = (delta / mag) * speed
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+-- ============================================================================
 --  Blade farm
 --
 --  Multi Hit OFF: one nape, one Slash + one hit request per 1.05s swing
@@ -1353,6 +1450,10 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 
 	local list = KiraBladeTargets(targetPart, validNapes)
 	if #list == 0 then return 0 end
+
+	-- The server only accepts hit requests that belong to a real swing, so
+	-- every blade attack taps M1 before the Slash + Register burst.
+	KiraM1()
 
 	local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
 
@@ -2550,7 +2651,13 @@ function AutoFarm:Start()
 				local moveMode = GetOption("MovementModeDropdown", "Hover")
 				local moveSpeed = math.max(tonumber(GetOption("HoverSpeedSlider", 400)) or 400, 100)
 				local moveKey = targetPart
-				if moveMode == "Teleport" then
+				if isBlades and moveMode ~= "Teleport" then
+					-- Blades: hold 400+ studs/s of momentum (more velocity =
+					-- more blade damage) and orbit inside the attack ring
+					-- instead of tweening to a stop above the titan.
+					KiraCancelFarmMove()
+					KiraBladeMomentum(root, targetHeightPos, targetPart)
+				elseif moveMode == "Teleport" then
 					KiraCancelFarmMove()
 					root.AssemblyLinearVelocity = Vector3.zero
 					root.AssemblyAngularVelocity = Vector3.zero
@@ -2781,29 +2888,21 @@ task.spawn(function()
 		end
 
 		if weaponType == "Blades" then
+			-- Only reload once the equipped set is completely used up (every
+			-- blade on the rig is Broken). The old per-broken-blade swap fired
+			-- a Reload after every kill and burned spare sets for nothing.
 			if KiraBladesEmpty() == true then
 				local spare = KiraBladeSpare()
-				if spare and spare > 0 and (now - lastReloadTime) > 0.6 then
-					-- Kira: swap to a spare set first, only walk to a station
-					-- once no spare sets are left.
-					lastReloadTime = now
-					lastRefillTime = now
-					pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
-					state.BladeSettleUntil = now + 0.7
+				if spare and spare > 0 then
+					-- Give the game's own swap a moment first: it costs no set.
+					if KiraBladesEmptyFor() >= 1.2 and (now - lastReloadTime) > 2.5 then
+						lastReloadTime = now
+						pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
+						state.BladeSettleUntil = now + 0.7
+					end
 				elseif (now - lastRefillTime) > 1.2 then
 					lastRefillTime = now
 					pcall(function() RefillCore:Try("Blades") end)
-				end
-			else
-				-- One blade broke but sets remain: normal blade swap.
-				local broken = false
-				for _, b in ipairs(KiraBladeParts()) do
-					if b:GetAttribute("Broken") then broken = true break end
-				end
-				if broken and (now - lastReloadTime) > 0.6 then
-					lastReloadTime = now
-					pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
-					state.BladeSettleUntil = now + 0.7
 				end
 			end
 
@@ -2825,6 +2924,73 @@ task.spawn(function()
 			end
 		end)
 	end
+end)
+
+-- ============================================================================
+--  [KIRA] NO KILL LAG
+--  The stutter after a kill is the titan ragdoll: on death the humanoid breaks
+--  every joint and the client suddenly simulates a pile of loose parts. With
+--  the toggle on, titan humanoids never break their joints on death and the
+--  corpse is stripped of collision / mass, so the kill resolves without the
+--  physics spike. Client-side only: the server still sees a normal kill.
+-- ============================================================================
+task.spawn(function()
+	local seen = setmetatable({}, { __mode = "k" })
+
+	local function stripCorpse(model)
+		pcall(function()
+			for _, d in ipairs(model:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.CanCollide = false
+					d.CanTouch = false
+					d.Massless = true
+				elseif d:IsA("ParticleEmitter") then
+					d.Enabled = false
+				end
+			end
+		end)
+	end
+
+	local function disarm(model)
+		local hum = model:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		pcall(function() hum.BreakJointsOnDeath = false end)
+		if seen[model] then return end
+		seen[model] = true
+		pcall(function()
+			hum.Died:Connect(function()
+				if not IsToggled("NoKillLagToggle") then return end
+				task.defer(function()
+					if model.Parent then stripCorpse(model) end
+				end)
+			end)
+		end)
+	end
+
+	local hookedFolder, conn = nil, nil
+	while task.wait(0.5) do
+		if not getgenv().KiraHubAOTR then break end
+		if not IsToggled("NoKillLagToggle") then continue end
+		if isLobby or isMenu then continue end
+		local tf = workspace:FindFirstChild("Titans")
+		if tf ~= hookedFolder then
+			if conn then pcall(function() conn:Disconnect() end) end
+			hookedFolder = tf
+			conn = nil
+			if tf then
+				local ok, c = pcall(function()
+					return tf.ChildAdded:Connect(function(m)
+						if m:IsA("Model") and IsToggled("NoKillLagToggle") then disarm(m) end
+					end)
+				end)
+				conn = ok and c or nil
+			end
+		end
+		for _, m in ipairs(tf and tf:GetChildren() or {}) do
+			if m:IsA("Model") then disarm(m) end
+		end
+	end
+	if conn then pcall(function() conn:Disconnect() end) end
 end)
 
 task.spawn(function()
@@ -3291,6 +3457,9 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
 	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
 	I_Upd:AddLabel("[+] Multi Hit (Risky) = exact SH blades/TS farm")
+	I_Upd:AddLabel("[+] Blades reload only when the whole set is used")
+	I_Upd:AddLabel("[+] Auto M1 + 400+ studs/s blade momentum")
+	I_Upd:AddLabel("[+] No Kill Lag (titan ragdoll stripped)")
 	I_Upd:AddLabel("[+] Blades/Spears weapon detection hardened")
 	I_Upd:AddLabel("[+] Jura font locked (configs cannot change it)")
 	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
@@ -3698,6 +3867,22 @@ function BuildUtilityTab(TabRef)
 
 	U_Combat:AddToggle("AutoEscapeToggle", {Text = "Auto Escape Grab", Default = false})
 	Toggles.AutoEscapeToggle:OnChanged(function() MarkDirty() end)
+
+	-- Blade hits only register on a real swing, so tap M1 with each slash.
+	U_Combat:AddToggle("AutoM1Toggle", {
+		Text = "Auto M1 (Blades)",
+		Default = true,
+		Tooltip = "Blade damage only lands on a real swing: sends an M1 with every blade slash."
+	})
+	Toggles.AutoM1Toggle:OnChanged(function() MarkDirty() end)
+
+	-- Kill lag is the titan death ragdoll; stop the physics spike.
+	U_Combat:AddToggle("NoKillLagToggle", {
+		Text = "No Kill Lag",
+		Default = false,
+		Tooltip = "Stops titan death ragdolls / death particles so kills do not stutter."
+	})
+	Toggles.NoKillLagToggle:OnChanged(function() MarkDirty() end)
 
 	-- Multi Hit: exact SH farm behaviour for blades and thunder spears.
 	-- OFF keeps the normal safe farm (one nape, one hit request per swing).
