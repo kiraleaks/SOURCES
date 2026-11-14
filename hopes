@@ -39,7 +39,7 @@ if type(game) == "userdata" or type(game) == "table" then
 	if not ok then task.wait(3) end
 end
 
-pcall(function() print("[Kira Premium] booting v2.9 ...") end)
+pcall(function() print("[Kira Premium] booting v3 ...") end)
 
 if getgenv().KiraHubAOTR then
 	pcall(function()
@@ -66,7 +66,6 @@ local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local TweenService = game:GetService("TweenService")
-local MarketplaceService = game:GetService("MarketplaceService")
 
 getgenv().KiraHub = {
 	Config = {},
@@ -92,7 +91,31 @@ getgenv().KiraHub = {
 		TargetNape = nil,
 		FeedbackCooldown = 0,
 		Dirty = false,
-		MissionStartTime = nil
+		MissionStartTime = nil,
+		-- Runtime fields (declared here so State always has a stable shape).
+		SlotTeleporting = false,
+		SlotSelectDone = false,
+		SlotSelectClicked = false,
+		SlotLobbyTryAt = 0,
+		LastSlashAt = 0,
+		LastForceRetryAt = 0,
+		LastAutoRetryClick = 0,
+		LastSpearChangeAt = 0,
+		SpearRefillCooldownUntil = 0,
+		SpearFires = 0,
+		LastSpearFireAt = 0,
+		BossBurstUntil = 0,
+		MissionTargetAt = 0,
+		BladeSettleUntil = 0,
+		MomentumNextAt = 0,
+		LastM1At = 0,
+		HoldSafeLeft = 0,
+		ForceSpearReset = false,
+		ShifterSkillsRunning = false,
+		FamilySpinning = false,
+		Refilling = false,
+		RefillStatus = "Idle",
+		_sawZeroTitans = false
 	},
 	UI = { Tabs = {}, Options = nil, Toggles = nil, Labels = {} },
 	Classes = {},
@@ -116,7 +139,6 @@ if not player then
 	return
 end
 local pGui = player:WaitForChild("PlayerGui")
-local mobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
 
 local LOBBY_ID = 14916516914
 local MENU_ID = 13379208636
@@ -134,13 +156,12 @@ local CFG_SESSION_MYTHICALS = CFG_FOLDER .. "/session_mythicals.txt"
 local CFG_SESSION_CRASHES = CFG_FOLDER .. "/session_crashes.txt"
 local CFG_RETURN_COUNTER = CFG_FOLDER .. "/return_counter.txt"
 local CFG_BAN_CACHE = CFG_FOLDER .. "/last_ban_status.txt"
-local ConfigFile = CFG_FOLDER .. "/dropdown_config.json"
 local AllStatesFile = CFG_FOLDER .. "/all_states.json"
 local CFG_EXPORT_CONFIG = CFG_FOLDER .. "/export_config.lua"
 local CFG_KEY = CFG_FOLDER .. "/premium_key.txt"
 local CFG_KEYBINDS = CFG_FOLDER .. "/keybinds.txt"
 
-local SCRIPT_VERSION = "v2.9 Premium | Smooth Integration"
+local SCRIPT_VERSION = "v3 Premium"
 local GAME_NAME = "Attack on Titan: Revolution"
 
 local WH_PERSONAL_EXECUTION = "https://discord.com/api/webhooks/1551250004755218442/cgEfXd3tlXOsEHUUFtLM01loSnxA7PQc_RDDvMdVumgtqnH_GRYjYvxUA6cwD1OK3f4g"
@@ -355,6 +376,468 @@ getgenv().KiraHub.Data.SkinToBoss = {
 local remotesFolder = ReplicatedStorage:WaitForChild("Assets"):WaitForChild("Remotes")
 local getRemote = remotesFolder:WaitForChild("GET")
 local postRemote = remotesFolder:WaitForChild("POST")
+-- ============================================================================
+--  kira_humanize.lua :: behavioral governor for Kira Hub (v4)
+--  ---------------------------------------------------------------------------
+--  Shapes the signals a server-side behavioral classifier can actually see:
+--
+--    * inter-remote spacing      (no more 20 events in one Heartbeat frame)
+--    * attack cadence            (jittered interval, not 1.05s exactly)
+--    * mission throughput        (hard ceiling on missions/hour, human pacing)
+--    * fatigue drift             (intervals grow slowly across a session)
+--    * attention lapses          (occasional long pause instead of a beat)
+--    * session cycles            (play/break, persisted across rejoins)
+--
+--  This is NOT an anti-cheat bypass. There is no client-side check to defeat.
+--  It reduces the statistical distance between the hub's output and a human.
+-- ============================================================================
+
+local Human = {}
+
+Human.Config = {
+	Enabled            = true,
+
+	-- ---- inter-remote spacing (seconds) ------------------------------------
+	-- Two events that belong together (slash + hit register) should land
+	-- ~1-3 frames apart, like a real swing. Everything else gets a wider gap.
+	SendBase           = 0.022,
+	SendSigma          = 0.014,
+	SendMin            = 0.008,
+	SendMax            = 0.220,
+	SendLapseChance    = 0.03,
+	SendLapseMin       = 0.30,
+	SendLapseMax       = 0.90,
+
+	-- ---- attack cadence ----------------------------------------------------
+	-- Multiplier band applied to whatever interval the farm asks for.
+	CadenceLow         = 0.86,
+	CadenceHigh        = 1.26,
+	CadenceLapseChance = 0.06,
+	CadenceLapseMin    = 0.18,
+	CadenceLapseMax    = 0.70,
+
+	-- ---- fatigue -----------------------------------------------------------
+	FatiguePerMin      = 0.004,
+	FatigueCap         = 0.45,
+
+	-- ---- throughput ceiling (remote ops / minute) --------------------------
+	OpsWindow          = 60,
+	OpsTarget          = 320,
+	OpsVariance        = 0.18,
+
+	-- ---- mission pacing ----------------------------------------------------
+	MissionsPerHour    = 24,      -- human ceiling; 0 disables the ceiling
+	MissionHesitateMin = 0.9,     -- think-time before creating a mission
+	MissionHesitateMax = 3.6,
+	MissionCeilSlack   = 0.20,    -- +/- 20% on the hourly ceiling
+	MissionMaxWait     = 300,     -- never block longer than this per call
+
+	-- ---- session scheduling (seconds) --------------------------------------
+	SessionEnabled     = true,
+	SessionMin         = 55 * 60,
+	SessionMax         = 100 * 60,
+	BreakMin           = 90,
+	BreakMax           = 240,
+	DailyCap           = 5 * 60 * 60,
+
+	StateFile          = "kirahubHumanState.json",
+}
+
+-- ---------------------------------------------------------------- primitives
+
+local function clamp(v, lo, hi)
+	if v < lo then return lo end
+	if v > hi then return hi end
+	return v
+end
+
+-- Box-Muller standard normal.
+local gaussSpare = nil
+local function gauss()
+	if gaussSpare ~= nil then
+		local v = gaussSpare
+		gaussSpare = nil
+		return v
+	end
+	local u1 = math.max(1e-9, math.random())
+	local u2 = math.random()
+	local r = math.sqrt(-2 * math.log(u1))
+	local theta = 2 * math.pi * u2
+	gaussSpare = r * math.sin(theta)
+	return r * math.cos(theta)
+end
+
+local sessionStart = os.clock()
+local playSeconds  = 0
+local breakUntil   = 0
+local dayStamp     = nil
+local daySeconds   = 0
+
+local ops          = {}
+local missionTimes = {}
+
+-- Sleep that aborts when the hub unloads, so a long pause never wedges.
+function Human.sleep(seconds)
+	local target = os.clock() + math.max(0, tonumber(seconds) or 0)
+	while os.clock() < target do
+		if not getgenv().KiraHubAOTR then return false end
+		task.wait(math.min(0.25, target - os.clock()))
+	end
+	return true
+end
+
+-- ---------------------------------------------------------------- persistence
+
+local function loadState()
+	if type(readfile) ~= "function" then return end
+	local ok, raw = pcall(readfile, Human.Config.StateFile)
+	if not ok or type(raw) ~= "string" then return end
+	local ok2, data = pcall(function()
+		return game:GetService("HttpService"):JSONDecode(raw)
+	end)
+	if ok2 and type(data) == "table" then
+		dayStamp   = data.day or nil
+		daySeconds = tonumber(data.daySeconds) or 0
+		breakUntil = tonumber(data.breakUntil) or 0
+	end
+end
+
+local function saveState()
+	if type(writefile) ~= "function" then return end
+	local ok, encoded = pcall(function()
+		return game:GetService("HttpService"):JSONEncode({
+			day = dayStamp,
+			daySeconds = daySeconds,
+			breakUntil = breakUntil,
+		})
+	end)
+	if ok then pcall(writefile, Human.Config.StateFile, encoded) end
+end
+
+-- ---------------------------------------------------------------- fatigue
+
+function Human.fatigue()
+	local mins = (os.clock() - sessionStart) / 60
+	return math.min(Human.Config.FatigueCap, mins * Human.Config.FatiguePerMin)
+end
+
+-- ---------------------------------------------------------------- spacing
+
+-- Gap between two consecutive remote sends, in seconds.
+function Human.interSend()
+	local c = Human.Config
+	if not c.Enabled then return 0 end
+	if math.random() < c.SendLapseChance then
+		return c.SendLapseMin + math.random() * (c.SendLapseMax - c.SendLapseMin)
+	end
+	local fat = 1 + Human.fatigue()
+	local v = c.SendBase + gauss() * c.SendSigma * fat
+	return clamp(v, c.SendMin, c.SendMax)
+end
+
+-- Jitter applied to a requested cadence (1.05s, 0.4s, 0.6s ...).
+function Human.jitterInterval(base)
+	local c = Human.Config
+	base = tonumber(base) or 1
+	if not c.Enabled then return base end
+	local fat = 1 + Human.fatigue()
+	local v = base * (c.CadenceLow + math.random() * (c.CadenceHigh - c.CadenceLow)) * fat
+	if math.random() < c.CadenceLapseChance then
+		v = v + c.CadenceLapseMin + math.random() * (c.CadenceLapseMax - c.CadenceLapseMin)
+	end
+	return v
+end
+
+-- ---------------------------------------------------------------- throughput
+
+-- Sliding-window ceiling on remote ops/minute.
+function Human.throttle()
+	local c = Human.Config
+	if not c.Enabled then return end
+	local now = os.clock()
+
+	while #ops > 0 and now - ops[1] > c.OpsWindow do
+		table.remove(ops, 1)
+	end
+
+	local target = c.OpsTarget * (1 + (math.random() * 2 - 1) * c.OpsVariance)
+	local rate = (#ops / c.OpsWindow) * 60
+
+	if rate > target then
+		local over = (rate - target) / math.max(target, 1)
+		Human.sleep(math.min(0.75, over * 0.35))
+	end
+
+	ops[#ops + 1] = os.clock()
+	if #ops > 4 * c.OpsTarget then table.remove(ops, 1) end
+end
+
+-- ---------------------------------------------------------------- missions
+
+-- Called immediately before S_Missions "Create".
+-- Enforces an hourly ceiling and inserts human think-time.
+function Human.missionPace()
+	local c = Human.Config
+	if not c.Enabled then return true end
+
+	-- A scheduled break is taken between missions, never mid-fight.
+	if Human.inBreak() then
+		local remaining = math.min(c.MissionMaxWait, Human.breakRemaining())
+		if remaining > 0 and not Human.sleep(remaining) then return false end
+		if Human.inBreak() then return false end
+	end
+
+	local now = os.clock()
+	while #missionTimes > 0 and now - missionTimes[1] > 3600 do
+		table.remove(missionTimes, 1)
+	end
+
+	if c.MissionsPerHour and c.MissionsPerHour > 0 then
+		local target = math.max(1, math.floor(
+			c.MissionsPerHour * (1 + (math.random() * 2 - 1) * c.MissionCeilSlack)
+		))
+		local n = #missionTimes
+		if n >= target then
+			-- the (target)th most recent mission must be an hour old
+			local oldest = missionTimes[n - target + 1]
+			if oldest then
+				local waitFor = math.min(c.MissionMaxWait, (oldest + 3600) - now)
+				if waitFor > 0 and not Human.sleep(waitFor) then return false end
+			end
+		end
+	end
+
+	local think = c.MissionHesitateMin
+		+ math.random() * (c.MissionHesitateMax - c.MissionHesitateMin)
+	if not Human.sleep(think) then return false end
+
+	missionTimes[#missionTimes + 1] = os.clock()
+	if #missionTimes > 200 then table.remove(missionTimes, 1) end
+	return true
+end
+
+-- ---------------------------------------------------------------- session
+
+function Human.sessionTick()
+	local c = Human.Config
+	if not c.Enabled then return "play" end
+
+	local now = os.time()
+	local today = os.date("%Y%m%d")
+
+	if dayStamp ~= today then
+		dayStamp = today
+		daySeconds = 0
+		breakUntil = 0
+	end
+
+	if now < breakUntil then return "break" end
+
+	if breakUntil ~= 0 and now >= breakUntil then
+		breakUntil = 0
+		sessionStart = os.clock()
+		playSeconds = 0
+		saveState()
+	end
+
+	playSeconds = playSeconds + 1
+	daySeconds = daySeconds + 1
+
+	if daySeconds >= c.DailyCap then
+		breakUntil = now + 8 * 60 * 60
+		saveState()
+		return "break"
+	end
+
+	if c.SessionEnabled then
+		local sessionLen = c.SessionMin + math.random() * (c.SessionMax - c.SessionMin)
+		if playSeconds >= sessionLen then
+			breakUntil = now + c.BreakMin + math.random() * (c.BreakMax - c.BreakMin)
+			playSeconds = 0
+			saveState()
+			return "break"
+		end
+	end
+
+	return "play"
+end
+
+function Human.inBreak()
+	return os.time() < breakUntil
+end
+
+function Human.breakRemaining()
+	return math.max(0, breakUntil - os.time())
+end
+
+-- ---------------------------------------------------------------- diagnostics
+
+function Human.stats()
+	local now = os.clock()
+	local recent = 0
+	for i = 1, #ops do
+		if now - ops[i] <= 60 then recent = recent + 1 end
+	end
+	local missionsHour = 0
+	for i = 1, #missionTimes do
+		if now - missionTimes[i] <= 3600 then missionsHour = missionsHour + 1 end
+	end
+	return {
+		enabled        = Human.Config.Enabled,
+		opsPerMin      = recent,
+		opsTarget      = Human.Config.OpsTarget,
+		missionsHour   = missionsHour,
+		missionsTarget = Human.Config.MissionsPerHour,
+		sessionSec     = math.floor(now - sessionStart),
+		fatigue        = Human.fatigue(),
+		inBreak        = Human.inBreak(),
+		breakRemaining = Human.breakRemaining(),
+		daySeconds     = daySeconds,
+	}
+end
+
+loadState()
+
+
+getgenv().KiraHub.Human = Human
+
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if not getgenv().KiraHubAOTR then break end
+		pcall(Human.sessionTick)
+	end
+end)
+
+-- ============================================================================
+--  [KIRA v4] KiraNet -- paced remote sender
+--  ---------------------------------------------------------------------------
+--  v3 flushed up to 20 remotes per Heartbeat, so every batch carried the
+--  same frame timestamp. That is a machine fingerprint no human can produce.
+--  v4 emits exactly one event per send slot, with a governed gap between
+--  slots, and routes InvokeServer through the same governor.
+-- ============================================================================
+local KiraNet = {
+	Queue = {},
+	Head = 1,
+	Tail = 0,
+	MaxQueue = 800,
+	Sent = 0,
+	LastSendAt = 0,
+	Errors = 0,
+}
+
+function KiraNet:_Allowed()
+	if not getgenv().KiraHubAOTR then return false end
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if st and st.EmergencyStop == true then return false end
+	return true
+end
+
+-- Reserve one send slot: enforces the op ceiling and the inter-remote gap.
+function KiraNet:_Slot()
+	Human.throttle()
+	local gap = Human.interSend()
+	local waitFor = (self.LastSendAt + gap) - os.clock()
+	if waitFor > 0 then Human.sleep(waitFor) end
+	self.LastSendAt = os.clock()
+end
+
+function KiraNet:Fire(remote, ...)
+	if not remote or not remote.Parent then return false end
+	if (self.Tail - self.Head + 1) >= self.MaxQueue then return false end
+	self.Tail = self.Tail + 1
+	self.Queue[self.Tail] = {remote = remote, args = table.pack(...)}
+	return true
+end
+
+-- Synchronous path. InvokeServer already yields, so the governor's pause is
+-- behaviourally invisible to callers.
+function KiraNet:Invoke(remote, ...)
+	if not remote or not remote.Parent then return nil end
+	if not self:_Allowed() then return nil end
+
+	local a1, a2 = ...
+	if a1 == "S_Missions" and a2 == "Create" then
+		if not Human.missionPace() then return nil end
+	end
+
+	self:_Slot()
+	if not self:_Allowed() then return nil end
+
+	local args = table.pack(...)
+	local ok, res = pcall(function()
+		return table.pack(remote:InvokeServer(table.unpack(args, 1, args.n)))
+	end)
+	if not ok then
+		self.Errors = self.Errors + 1
+		return nil
+	end
+	return table.unpack(res, 1, res.n)
+end
+
+-- Compatibility shim. Drains at the same governed pace; only used on unload.
+function KiraNet:Flush(limit)
+	local sent = 0
+	limit = limit or (self.Tail - self.Head + 1)
+	while self.Head <= self.Tail and sent < limit do
+		local item = self.Queue[self.Head]
+		self.Queue[self.Head] = nil
+		self.Head = self.Head + 1
+		sent = sent + 1
+		if item and item.remote and item.remote.Parent then
+			self:_Slot()
+			pcall(item.remote.FireServer, item.remote, table.unpack(item.args, 1, item.args.n))
+			self.Sent = self.Sent + 1
+		end
+	end
+	if self.Head > self.Tail then
+		self.Head, self.Tail = 1, 0
+	end
+end
+
+function KiraNet:Pending()
+	return self.Tail - self.Head + 1
+end
+
+function KiraNet:Stats()
+	return {
+		pending   = self:Pending(),
+		sent      = self.Sent,
+		errors    = self.Errors,
+		lastSendAt = self.LastSendAt,
+		human     = Human.stats(),
+	}
+end
+
+-- Paced sender: one dequeued event per slot. Never a frame-aligned burst.
+task.spawn(function()
+	while true do
+		if not getgenv().KiraHubAOTR then break end
+		if not KiraNet:_Allowed() then
+			KiraNet.Queue = {}
+			KiraNet.Head, KiraNet.Tail = 1, 0
+			task.wait(0.2)
+		elseif KiraNet.Head > KiraNet.Tail then
+			task.wait(0.05)
+		else
+			local item = KiraNet.Queue[KiraNet.Head]
+			KiraNet.Queue[KiraNet.Head] = nil
+			KiraNet.Head = KiraNet.Head + 1
+			if KiraNet.Head > KiraNet.Tail then
+				KiraNet.Head, KiraNet.Tail = 1, 0
+			end
+			if item and item.remote and item.remote.Parent then
+				KiraNet:_Slot()
+				pcall(item.remote.FireServer, item.remote, table.unpack(item.args, 1, item.args.n))
+				KiraNet.Sent = KiraNet.Sent + 1
+			end
+		end
+	end
+end)
+
+getgenv().KiraHub.Net = KiraNet
+
 
 local INTERFACE = pGui:WaitForChild("Interface")
 local rewards = INTERFACE:FindFirstChild("Rewards")
@@ -552,7 +1035,7 @@ local mapData = nil
 
 function GetPlayerData()
 	if os.clock() - lastPlayerDataTime < 0.5 and lastPlayerData then return lastPlayerData end
-	local ok, result = pcall(function() return getRemote:InvokeServer("Functions", "Settings", "Get") end)
+	local ok, result = pcall(function() return KiraNet:Invoke(getRemote, "Functions", "Settings", "Get") end)
 	if ok and result then
 		lastPlayerData = result
 		lastPlayerDataTime = os.clock()
@@ -563,7 +1046,7 @@ end
 
 function CheckMissionExists()
 	if workspace:GetAttribute("Type") then return true end
-	local ok, result = pcall(function() return getRemote:InvokeServer("Data", "Copy") end)
+	local ok, result = pcall(function() return KiraNet:Invoke(getRemote, "Data", "Copy") end)
 	if ok and result then mapData = result end
 	return mapData ~= nil and mapData.Map ~= nil and mapData.Slots ~= nil
 end
@@ -572,7 +1055,7 @@ local startLoadTime = os.clock()
 if not isLobby and not isMenu then
 	repeat
 		task.wait(1)
-		local ok, result = pcall(function() return getRemote:InvokeServer("Data", "Copy") end)
+		local ok, result = pcall(function() return KiraNet:Invoke(getRemote, "Data", "Copy") end)
 		if ok and result then
 			mapData = result
 		else
@@ -631,6 +1114,62 @@ function UseButton(button)
 	task.wait(0.05)
 	VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
 	VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+	return true
+end
+
+-- Auto Retry is a GUI click only: it clicks the Rewards screen's RETRY
+-- button. The retry remotes are reserved for Force Retry and the stuck-result
+-- recovery path, never for Auto Retry.
+function KiraFindRewardsRetry()
+	local rewardsGui = INTERFACE:FindFirstChild("Rewards")
+	if not rewardsGui or not rewardsGui.Visible then return nil, nil end
+	for _, d in ipairs(rewardsGui:GetDescendants()) do
+		if (d:IsA("TextButton") or d:IsA("TextLabel")) and d.Visible then
+			local text = string.upper(tostring(d.Text or ""))
+			text = text:gsub("<[^>]->", ""):gsub("^%s+", ""):gsub("%s+$", "")
+			if text:match("^RETRY") then
+				local clickable = d
+				for _ = 1, 4 do
+					if not clickable or clickable == pGui then break end
+					if clickable:IsA("GuiButton") then break end
+					clickable = clickable.Parent
+				end
+				if clickable and not clickable:IsA("GuiButton") then clickable = nil end
+				return d, clickable
+			end
+		end
+	end
+	return nil, nil
+end
+
+function KiraClickRewardsRetry()
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	local now = os.clock()
+	if state then
+		if now - (state.LastAutoRetryClick or 0) < 1.5 then return false end
+		state.LastAutoRetryClick = now
+	end
+	local label, button = KiraFindRewardsRetry()
+	if not label then return false end
+	if button then
+		if type(firesignal) == "function" then
+			pcall(firesignal, button.Activated)
+			pcall(firesignal, button.MouseButton1Click)
+		end
+		pcall(UseButton, button)
+		return true
+	end
+	-- No GuiButton wrapper: click the label's on-screen position directly.
+	pcall(function()
+		local gui = label:FindFirstAncestorOfClass("ScreenGui")
+		local offset = (gui and gui.IgnoreGuiInset) and Vector2.zero or GuiService:GetGuiInset()
+		local point = label.AbsolutePosition + label.AbsoluteSize / 2 + offset
+		VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+		task.wait(0.05)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+		task.wait(0.06)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+	end)
 	return true
 end
 
@@ -712,60 +1251,16 @@ function GetWatchTower(index)
 end
 
 -- ============================================================================
---  [KIRA] SMOOTH CORE
---  Ported from Smooth Hub's working farm/refill implementation:
+--  [KIRA] COMBAT CORE
+--  Ported from the proven farm/refill implementation:
 --   - character-based weapon + ammo detection (no HUD dependency)
 --   - batched remote sender (no more dropped / rate-limited hits)
 --   - real refill flow: remote -> verify "Refills" attribute -> fly to station
 --     -> press ProximityPrompt / R -> re-fire remote -> fly back
 -- ============================================================================
 
-local KiraNet = {
-	Queue = {},
-	Head = 1,
-	Tail = 0,
-	PerFrame = 20,
-	MaxQueue = 800,
-	Sent = 0,
-}
+-- [KIRA v4] legacy frame-batched KiraNet removed; paced sender lives near the top.
 
-function KiraNet:Fire(remote, ...)
-	if not remote or not remote.Parent then return false end
-	if (self.Tail - self.Head + 1) >= self.MaxQueue then return false end
-	self.Tail = self.Tail + 1
-	self.Queue[self.Tail] = {remote = remote, args = table.pack(...)}
-	return true
-end
-
-function KiraNet:Flush(limit)
-	local sent = 0
-	limit = limit or self.PerFrame
-	while self.Head <= self.Tail and sent < limit do
-		local item = self.Queue[self.Head]
-		self.Queue[self.Head] = nil
-		self.Head = self.Head + 1
-		sent = sent + 1
-		if item and item.remote and item.remote.Parent then
-			pcall(item.remote.FireServer, item.remote, table.unpack(item.args, 1, item.args.n))
-			self.Sent = self.Sent + 1
-		end
-	end
-	if self.Head > self.Tail then
-		self.Head, self.Tail = 1, 0
-	end
-end
-
-function KiraNet:Pending()
-	return self.Tail - self.Head + 1
-end
-
-RunService.Heartbeat:Connect(function()
-	if getgenv().KiraHubAOTR then
-		pcall(function() KiraNet:Flush() end)
-	end
-end)
-
-getgenv().KiraHub.Net = KiraNet
 
 function KiraChar()
 	local char = player.Character
@@ -837,24 +1332,35 @@ function KiraBladeSpare()
 	return left
 end
 
-local KiraSpearAttrs = {"Spears", "Spear", "SpearCount", "TSpears", "ThunderSpears", "TS_Count"}
+KiraSpearAttrs = {"Spears", "Spear", "SpearCount", "TSpears", "ThunderSpears", "TS_Count"}
 
 function KiraHasSpearLoadout()
+	local hud = GetCurrentWeapon()
+	if hud == "Spears" then return true end
+	if hud == "Blades" then return false end
+	local rig = KiraRig()
+	if rig then
+		for _, armName in ipairs({"RightLowerArm", "LeftLowerArm"}) do
+			local arm = rig:FindFirstChild(armName)
+			local spears = arm and arm:FindFirstChild("Spears")
+			if spears and #spears:GetChildren() > 0 then return true end
+		end
+	end
 	local char = player.Character
-	if not char then return false end
-	for _, attr in ipairs(KiraSpearAttrs) do
-		if type(char:GetAttribute(attr)) == "number" then return true end
+	if char then
+		for _, attr in ipairs(KiraSpearAttrs) do
+			local v = char:GetAttribute(attr)
+			if type(v) == "number" and v > 0 then return true end
+		end
 	end
 	return false
 end
 
 function KiraSpearsLeft()
-	local char = player.Character
-	if not char then return nil end
-	for _, attr in ipairs(KiraSpearAttrs) do
-		local v = char:GetAttribute(attr)
-		if type(v) == "number" then return v end
-	end
+	-- The physical rig is the truth when it has spear parts: it shows exactly
+	-- which slots are still unused. Attributes / HUD are only a fallback for
+	-- when the rig has not streamed in. (Reading a stale "0" attribute before
+	-- the rig made spear users look empty and skip every attack.)
 	local rig = KiraRig()
 	if rig then
 		local total, unused = 0, 0
@@ -870,14 +1376,32 @@ function KiraSpearsLeft()
 		end
 		if total > 0 then return unused end
 	end
-	return GetSpearAmmoCount()
+
+	local best = nil
+	local function consider(v)
+		if type(v) == "number" and (best == nil or v > best) then best = v end
+	end
+	local char = player.Character
+	if char then
+		for _, attr in ipairs(KiraSpearAttrs) do
+			consider(char:GetAttribute(attr))
+		end
+	end
+	consider(GetSpearAmmoCount())
+	return best
 end
 
+-- Weapon detection order matters. The HUD and the physical rig are the only
+-- reliable sources during a fight; the "Spears" character attribute can linger
+-- at 0 on a blade loadout, and treating that as "Spears" made the farm loop
+-- refuse to swing blades (it kept asking for a spear refill instead).
 function KiraWeaponInfo()
-	if KiraHasSpearLoadout() then return "Spears" end
 	local hud = GetCurrentWeapon()
-	if hud then return hud end
+	if hud == "Blades" or hud == "Spears" then return hud end
 	if #KiraBladeParts() > 0 then return "Blades" end
+	local sets = GetBladeSetCount()
+	if sets ~= nil and sets > 0 then return "Blades" end
+	if KiraHasSpearLoadout() then return "Spears" end
 	return nil
 end
 
@@ -885,34 +1409,83 @@ local kiraUsedSpearIds = {}
 local kiraLastSpearCount = nil
 local kiraLastSpearSide = 8
 
+function KiraSpearIds()
+	local live = {}
+	local rig = KiraRig()
+	if rig then
+		for _, armName in ipairs({"RightLowerArm", "LeftLowerArm"}) do
+			local arm = rig:FindFirstChild(armName)
+			local spears = arm and arm:FindFirstChild("Spears")
+			for _, p in ipairs(spears and spears:GetChildren() or {}) do
+				local id = tonumber(p.Name)
+				if id and id >= 1 and id <= 8 then
+					live[id] = not p:GetAttribute("Used")
+				end
+			end
+		end
+	end
+	return live
+end
+
+function KiraResetSpearMarks()
+	table.clear(kiraUsedSpearIds)
+	kiraLastSpearCount = KiraSpearsLeft()
+end
+
+function KiraReconcileSpears()
+	local live = KiraSpearIds()
+	for id in pairs(kiraUsedSpearIds) do
+		-- The spear is gone from the rig: free its mark so a later refill can
+		-- reuse that slot id instead of running out of fireable ids.
+		if live[id] == nil then
+			kiraUsedSpearIds[id] = nil
+		end
+	end
+	local ammo = KiraSpearsLeft() or 0
+	local free = 0
+	for id, unused in pairs(live) do
+		if unused and not kiraUsedSpearIds[id] then free = free + 1 end
+	end
+	if free == 0 and ammo > 0 then
+		-- Marks out of sync with the server: rebuild them from the rig.
+		table.clear(kiraUsedSpearIds)
+	end
+end
+
 function KiraRefreshSpearMarks()
 	local n = KiraSpearsLeft()
 	if kiraLastSpearCount ~= nil and n ~= nil and n > kiraLastSpearCount then
 		table.clear(kiraUsedSpearIds)
 	end
 	kiraLastSpearCount = n
+	KiraReconcileSpears()
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if st and st.ForceSpearReset then
+		st.ForceSpearReset = nil
+		table.clear(kiraUsedSpearIds)
+	end
 end
 
--- Smooth fires S_Fire with a SPEAR SLOT ID (1..8), never with the ammo count.
+-- S_Fire takes a SPEAR SLOT ID (1..8), never the ammo count.
 function KiraPickSpearId()
-	local rig = KiraRig()
-	if rig then
-		local ids = {}
-		for _, armName in ipairs({"RightLowerArm", "LeftLowerArm"}) do
-			local arm = rig:FindFirstChild(armName)
-			local spears = arm and arm:FindFirstChild("Spears")
-			for _, p in ipairs(spears and spears:GetChildren() or {}) do
-				local id = tonumber(p.Name)
-				if id and not p:GetAttribute("Used") and not kiraUsedSpearIds[id] then
-					table.insert(ids, id)
-				end
-			end
+	local live = KiraSpearIds()
+	local ids = {}
+	for id, unused in pairs(live) do
+		if unused and not kiraUsedSpearIds[id] then
+			ids[#ids + 1] = id
 		end
-		if #ids > 0 then
-			local id = ids[math.random(1, #ids)]
-			kiraUsedSpearIds[id] = true
-			return id
+	end
+	if #ids == 0 then
+		table.clear(kiraUsedSpearIds)
+		for id, unused in pairs(live) do
+			if unused then ids[#ids + 1] = id end
 		end
+	end
+	if #ids > 0 then
+		local id = ids[math.random(1, #ids)]
+		kiraUsedSpearIds[id] = true
+		kiraLastSpearSide = id
+		return id
 	end
 	kiraLastSpearSide = (kiraLastSpearSide == 8) and 7 or 8
 	return kiraLastSpearSide
@@ -926,6 +1499,18 @@ function KiraNape(titan)
 	return nil
 end
 
+-- A nape part lives at Titan.Hitboxes.Hit.Nape, so the titan model is three
+-- parents up. Walking the ancestry is nil-safe (a part can be unparented
+-- mid-frame while the farm loop still holds a reference to it).
+function KiraNapeModel(nape)
+	local node = nape
+	for _ = 1, 3 do
+		if not node then return nil end
+		node = node.Parent
+	end
+	return node
+end
+
 function KiraTitanAlive(titan)
 	if not (titan and titan.Parent) then return false end
 	local hum = titan:FindFirstChildOfClass("Humanoid")
@@ -934,8 +1519,8 @@ function KiraTitanAlive(titan)
 	return true
 end
 
--- Smooth's place -> refill path map (station streaming support)
-local KIRA_REFILL_PLACES = {
+-- Kira's place -> refill path map (station streaming support)
+KIRA_REFILL_PLACES = {
 	[13379349730]     = {"Unclimbable", "Props", "HQ"},
 	[14012874501]     = {"Unclimbable", "Props", "HQ"},
 	[13904207646]     = {"Climbable", "_Walls", "Gate"},
@@ -1067,6 +1652,289 @@ function KiraTweenRoot(root, targetPos, speed)
 	conn:Disconnect()
 end
 
+-- ============================================================
+-- Farm movement: one linear tween per committed target, with the
+-- root velocity locked every frame while it plays. No per-frame
+-- CFrame writes, so the character glides instead of vibrating.
+-- ============================================================
+function KiraCancelFarmMove()
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return end
+	if st.FarmTween then pcall(function() st.FarmTween:Cancel() end) end
+	st.FarmTween = nil
+	st.FarmMoveTarget = nil
+	st.FarmMoveKey = nil
+end
+
+function KiraFarmMove(root, targetPos, speed, key, maxDur)
+	if not root or not targetPos then return end
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return end
+	local active = st.FarmTween
+	local sameKey = key ~= nil and st.FarmMoveKey == key
+	local committed = st.FarmMoveTarget
+	local moved = committed and (targetPos - committed).Magnitude or math.huge
+	if active and sameKey and active.PlaybackState == Enum.PlaybackState.Playing and moved < 12 then
+		return
+	end
+	if active then pcall(function() active:Cancel() end) end
+	local dist = (root.Position - targetPos).Magnitude
+	if dist < 1.5 then
+		st.FarmTween = nil
+		st.FarmMoveTarget = targetPos
+		st.FarmMoveKey = key
+		return
+	end
+	local dur = math.clamp(dist / math.max(tonumber(speed) or 400, 80), 0.12, maxDur or 4)
+	local ok, tween = pcall(function()
+		return TweenService:Create(root, TweenInfo.new(dur, Enum.EasingStyle.Linear), {CFrame = CFrame.new(targetPos)})
+	end)
+	if ok and tween then
+		st.FarmTween = tween
+		st.FarmMoveTarget = targetPos
+		st.FarmMoveKey = key
+		tween:Play()
+	else
+		pcall(function() root.CFrame = CFrame.new(targetPos) end)
+	end
+end
+
+-- Global velocity lock for the farm tween (single Heartbeat connection).
+RunService.Heartbeat:Connect(function()
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return end
+	local tween = st.FarmTween
+	if not tween or tween.PlaybackState ~= Enum.PlaybackState.Playing then return end
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+	end
+end)
+
+-- Slash + hit request sync: both are sent together once per interval.
+-- Multi Hit shortens the window to SH's cadence (0.4s blades / 0.6s spears).
+KiraSlashInterval = 1.05
+function KiraSlashGate(now, interval)
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return false end
+	now = now or os.clock()
+	interval = interval or KiraSlashInterval
+	-- [KIRA v4] fixed cadence is the loudest machine signature. Every gate
+	-- now schedules the NEXT attack at a jittered offset, so the interval
+	-- distribution has real spread instead of a constant 1.05s.
+	local nextAt = st.KiraNextSlashAt or 0
+	if now >= nextAt then
+		st.LastSlashAt = now
+		st.KiraNextSlashAt = now + Human.jitterInterval(interval)
+		return true
+	end
+	return false
+end
+
+-- ============================================================================
+--  Blade M1 + momentum
+--
+--  AOTR only registers blade hits on a real swing, so every blade attack also
+--  taps M1 (aimed at a viewport point no visible GUI covers, so it can never
+--  press a hub button). Blade damage scales with velocity, so while blades are
+--  out the farm keeps the character moving at 400+ studs/s around the titan
+--  instead of parking with zero speed.
+-- ============================================================================
+local kiraM1At = 0
+
+function KiraM1()
+	if not IsToggled("AutoM1Toggle") then return false end
+	local now = os.clock()
+	if now - kiraM1At < 0.08 then return false end
+	local okFocus, focused = pcall(function() return UserInputService:GetFocusedTextBox() end)
+	if okFocus and focused then return false end
+	kiraM1At = now
+
+	local cam = workspace.CurrentCamera
+	local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+	local points = {
+		Vector2.new(vp.X * 0.5, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.82, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.18, vp.Y * 0.5),
+		Vector2.new(vp.X * 0.5, vp.Y * 0.8),
+	}
+	local gui = player:FindFirstChildOfClass("PlayerGui")
+	local point = points[1]
+	for _, c in ipairs(points) do
+		local blocked = false
+		if gui then
+			local ok, objs = pcall(function() return gui:GetGuiObjectsAtPosition(c.X, c.Y) end)
+			if ok and type(objs) == "table" then
+				for _, o in ipairs(objs) do
+					if o and o.Visible and o.AbsoluteSize.X > 0 and o.AbsoluteSize.Y > 0 then
+						blocked = true
+						break
+					end
+				end
+			end
+		end
+		if not blocked then
+			point = c
+			break
+		end
+	end
+
+	pcall(function()
+		VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
+		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
+	end)
+	task.delay(0.04, function()
+		pcall(function()
+			VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
+		end)
+	end)
+	return true
+end
+
+function KiraBladeMomentumSpeed()
+	local v = tonumber(GetOption("HoverSpeedSlider", 400)) or 400
+	return math.max(v, 400)
+end
+
+function KiraBladeMomentum(root, hoverPos, nape)
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not (root and hoverPos and st) then return end
+	local now = os.clock()
+	local speed = KiraBladeMomentumSpeed()
+	local aim = hoverPos
+	if nape and nape.Parent then
+		-- Rotate the aim point around the nape so the velocity vector keeps
+		-- changing direction (that is what builds momentum) while the
+		-- character stays well inside the horizontal attack ring.
+		local range = tonumber(GetOption("AttackRangeSlider", 150)) or 150
+		local radius = math.clamp(range * 0.45, 30, 120)
+		if now >= (st.MomentumNextAt or 0) then
+			st.MomentumNextAt = now + 0.35
+			st.OrbitAngle = ((st.OrbitAngle or 0) + 1.1) % (math.pi * 2)
+		end
+		local ang = st.OrbitAngle or 0
+		aim = Vector3.new(
+			nape.Position.X + math.cos(ang) * radius,
+			hoverPos.Y,
+			nape.Position.Z + math.sin(ang) * radius
+		)
+	end
+	local delta = aim - root.Position
+	local mag = delta.Magnitude
+	if mag < 0.5 then return end
+	root.AssemblyLinearVelocity = (delta / mag) * speed
+	root.AssemblyAngularVelocity = Vector3.zero
+end
+
+-- ============================================================================
+--  Blade farm
+--
+--  Multi Hit OFF: one nape, one Slash + one hit request per 1.05s swing
+--  (bosses keep their Blade Boss Hits loop). Safe, current behaviour.
+--
+--  Multi Hit ON: the SH blade farm -- the main nape plus every other live
+--  nape, nearest first, capped at defaultThunderTargets() = 20, one
+--  Slash + Register pair per nape per 0.4s. Raids, missions and waves all
+--  use this same path.
+-- ============================================================================
+function KiraMultiHitEnabled()
+	return IsToggled("MultiHitToggle") == true
+end
+
+function KiraBladeTargets(targetPart, validNapes)
+	local list = {}
+	if not (targetPart and targetPart.Parent) then return list end
+	list[1] = targetPart
+	if not KiraMultiHitEnabled() then return list end
+
+	-- SH defaultThunderTargets() is 20; the blade list is that many napes.
+	local want = 20
+	local candidates = {}
+	for _, n in ipairs(validNapes or {}) do
+		if n ~= targetPart and n and n.Parent then
+			if KiraTitanAlive(KiraNapeModel(n)) then
+				candidates[#candidates + 1] = {
+					part = n,
+					d = (n.Position - targetPart.Position).Magnitude
+				}
+			end
+		end
+	end
+	table.sort(candidates, function(a, b) return a.d < b.d end)
+	for _, c in ipairs(candidates) do
+		if #list >= want then break end
+		list[#list + 1] = c.part
+	end
+	return list
+end
+
+-- The server collapses a bundle of Slash + Register pairs that arrive in the
+-- same frame into a single accepted swing, which is why a boss sometimes ate
+-- 10 hits and sometimes only one. Pace the burst so every pair gets its own
+-- frame, and never start a second burst while the first is still running.
+function KiraBladeBossBurst(nape, hits)
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	if not (state and nape and nape.Parent) then return 0 end
+	hits = math.clamp(math.floor(tonumber(hits) or 10), 1, 60)
+	local now = os.clock()
+	if now < (state.BossBurstUntil or 0) then return 0 end
+
+	local interval = 0.1
+	state.BossBurstUntil = now + hits * interval + 0.3
+	task.spawn(function()
+		for i = 1, hits do
+			if not getgenv().KiraHubAOTR then break end
+			if state.EmergencyStop then break end
+			if not (nape and nape.Parent) then break end
+			KiraM1()
+			KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+			KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
+			if i < hits then
+				task.wait(interval + math.random() * 0.03)
+			end
+		end
+	end)
+	return hits * 2
+end
+
+function KiraBladeAttack(targetPart, validNapes, isBoss)
+	local st = getgenv().KiraHub and getgenv().KiraHub.State
+	if not st then return 0 end
+
+	local list = KiraBladeTargets(targetPart, validNapes)
+	if #list == 0 then return 0 end
+
+	-- The server only accepts hit requests that belong to a real swing, so
+	-- every blade attack taps M1 before the Slash + Register burst.
+	KiraM1()
+
+	local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+
+	-- KiraNet's queue holds 800 events; stop well before it overflows.
+	local sent = 0
+	for _, nape in ipairs(list) do
+		if nape and nape.Parent then
+			-- Boss bonus is applied per nape, never to the whole list. The old
+			-- code multiplied the boss hit count by every nape in a multi-hit
+			-- sweep and flooded the remote, so the server dropped the bundle.
+			local napeIsBoss = IsBossTarget(nape) or (isBoss and nape == targetPart)
+			if napeIsBoss then
+				sent = sent + KiraBladeBossBurst(nape, bossHits)
+			else
+				-- SH sends one Slash + Register per nape.
+				KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+				KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
+				sent = sent + 2
+			end
+		end
+		if sent >= 700 then break end
+	end
+	return sent
+end
+
+
 function KiraPressPrompt(prompt)
 	if not prompt then return false end
 	if type(fireproximityprompt) == "function" then
@@ -1115,7 +1983,7 @@ function KiraNeedsRefill(forceKind)
 		if KiraBladesEmpty() ~= true then return false end
 		local spare = KiraBladeSpare()
 		if spare == nil then
-			-- Smooth: when spare sets are not visible yet, wait for evidence
+			-- Kira: when spare sets are not visible yet, wait for evidence
 			-- (blades empty for a while) before walking to a station.
 			return KiraBladesEmptyFor() >= 5
 		end
@@ -1129,11 +1997,25 @@ function RefillCore:SetStatus(text)
 	getgenv().KiraHub.State.RefillStatus = text
 end
 
-function RefillCore:Try(forceKind)
+-- A refused shot can leave the HUD reading 0 for a moment even though the
+-- refill already succeeded, which used to chain into a second (or endless)
+-- reload. Every successful spear refill therefore starts a short cooldown and
+-- resets the fire counter, so one dry streak can only ever cost one refill.
+function KiraNoteSpearRefill()
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	if not state then return end
+	local now = os.clock()
+	state.SpearRefillCooldownUntil = now + 5
+	state.LastSpearChangeAt = now
+	state.SpearFires = 0
+	state.LastSpearFireAt = now
+end
+
+function RefillCore:Try(forceKind, forceNow)
 	local now = os.clock()
 	if self.Refilling then return false end
 	if now - self.LastAttempt < 1 then return false end
-	if not KiraNeedsRefill(forceKind) then return true end
+	if not forceNow and not KiraNeedsRefill(forceKind) then return true end
 
 	local kind = forceKind or KiraWeaponInfo()
 	if not kind then
@@ -1141,14 +2023,31 @@ function RefillCore:Try(forceKind)
 		return false
 	end
 
+	-- One spear refill per dry streak: after a success the HUD can still show
+	-- 0 (server lag), and the old code immediately queued another refill.
+	if kind == "Spears" and not forceNow then
+		local state = getgenv().KiraHub and getgenv().KiraHub.State
+		if state and now < (state.SpearRefillCooldownUntil or 0) then
+			self:SetStatus("Spears just refilled")
+			return false
+		end
+	end
+
 	self.LastAttempt = now
 	self.Attempts = self.Attempts + 1
 
 	local refillsBefore = KiraRefillsLeft()
 	local function Done()
-		if not KiraNeedsRefill(forceKind) then return true end
+		if not forceNow and not KiraNeedsRefill(forceKind) then return true end
 		local after = KiraRefillsLeft()
-		return refillsBefore ~= nil and after ~= nil and after < refillsBefore
+		if refillsBefore ~= nil and after ~= nil and after < refillsBefore then return true end
+		if forceNow and kind == "Spears" then
+			-- A forced spear refill is done once the rig shows an unused spear.
+			for _, unused in pairs(KiraSpearIds()) do
+				if unused then return true end
+			end
+		end
+		return false
 	end
 	local function WaitDone(sec)
 		local t0 = os.clock()
@@ -1168,9 +2067,11 @@ function RefillCore:Try(forceKind)
 		and os.clock() >= self.LongRangeBlockedUntil
 
 	local post = postRemote
-	if not post or not post.Parent then
+	if not (post and post.Parent) then
 		pcall(function()
-			post = ReplicatedStorage.Assets.Remotes:WaitForChild("POST", 5)
+			local assets = ReplicatedStorage:FindFirstChild("Assets")
+			local remotes = assets and assets:FindFirstChild("Remotes")
+			if remotes then post = remotes:WaitForChild("POST", 5) end
 		end)
 	end
 
@@ -1182,7 +2083,7 @@ function RefillCore:Try(forceKind)
 		if not station then
 			self:SetStatus("No refill station")
 			-- Still try a remote without a station reference as a last resort.
-			if longRangeAllowed then
+			if longRangeAllowed and post and post.Parent then
 				pcall(function() post:FireServer("Attacks", "Reload") end)
 			end
 			break
@@ -1196,6 +2097,10 @@ function RefillCore:Try(forceKind)
 				self.LongRangeFails = 0
 				self.Success = self.Success + 1
 				self:SetStatus("Refilled (remote)")
+				if kind == "Spears" then
+					KiraResetSpearMarks()
+					KiraNoteSpearRefill()
+				end
 				return true
 			end
 
@@ -1209,7 +2114,7 @@ function RefillCore:Try(forceKind)
 
 		if not allowStation then break end
 
-		-- Smooth step 2: physically go to the station, press the prompt, re-fire.
+		-- step 2: physically go to the station, press the prompt, re-fire.
 		local prompt = KiraPromptOf(station)
 		local targetPos = KiraPromptPos(prompt, station) or KiraPos(station)
 		local backCFrame = root.CFrame
@@ -1255,6 +2160,10 @@ function RefillCore:Try(forceKind)
 		if done then
 			self.Success = self.Success + 1
 			self:SetStatus("Refilled (station)")
+			if kind == "Spears" then
+				KiraResetSpearMarks()
+				KiraNoteSpearRefill()
+			end
 			return true
 		end
 
@@ -1264,6 +2173,10 @@ function RefillCore:Try(forceKind)
 	self.Refilling = false
 	getgenv().KiraHub.State.Refilling = false
 	return false
+end
+
+function RefillCore:ForceType(kind)
+	return self:Try(kind, true)
 end
 
 getgenv().KiraHub.Refill = RefillCore
@@ -1342,7 +2255,7 @@ function UpdateTitanESP()
 						local label = Instance.new("TextLabel")
 						label.Size = UDim2.new(1, 0, 1, 0)
 						label.BackgroundTransparency = 1
-						label.Font = Enum.Font.GothamBold
+						label.Font = Enum.Font.Jura
 						label.TextSize = 14
 						label.TextColor3 = Color3.fromRGB(255, 255, 255)
 						label.TextStrokeTransparency = 0.3
@@ -1462,7 +2375,7 @@ function ManageCrashDetection(enabled)
 					getgenv().KiraHub.State.Crashes = getgenv().KiraHub.State.Crashes + 1
 					pcall(function() getgenv().KiraHub.Classes.AutoFarm:Stop() end)
 					task.wait(0.5)
-					pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+					pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 					task.wait(0.5)
 					pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 				end
@@ -1485,7 +2398,7 @@ player.CharacterAdded:Connect(function()
 	-- If Auto Farm was toggled on in the lobby (or before the mission
 	-- loaded), Start() bailed out and `_running` stayed false. Now that the
 	-- character exists, start it for real.
-	if IsToggled("AutoKillToggle") then
+	if IsToggled("AutoKillToggle") or IsToggled("AutoFarmRaidsToggle") then
 		AutoFarm:Start()
 	end
 end)
@@ -1508,11 +2421,14 @@ function AutoFarm:Start()
 	end)
 
 	task.spawn(function()
+		-- Guard the whole farm loop: one unexpected error used to kill farming
+		-- silently until rejoin. Errors now stop the loop and warn once.
+		local ok, loopErr = pcall(function()
 		local function isWavesMode()
 			return workspace:FindFirstChild("Waves") ~= nil
 		end
 
-		-- Smooth-style readiness: only require a live character + a loaded map.
+		-- Kira-style readiness: only require a live character + a loaded map.
 		-- The old version required char.Main.W which does not always exist, so
 		-- the loop waited forever and Auto Farm never started.
 		local function checkReady()
@@ -1538,7 +2454,6 @@ function AutoFarm:Start()
 		if not self._running then return end
 
 		local titansFolder = workspace:FindFirstChild("Titans")
-		local lastAttack = 0
 		local currentChar, root = nil, nil
 		local attackTitanSpawnTime = nil
 
@@ -1579,7 +2494,7 @@ function AutoFarm:Start()
 				local limitSecs = GetOption("FailsafeMinutesSlider", 15) * 60
 				if elapsed >= limitSecs then
 					self:Stop()
-					pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+					pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 					task.wait(0.5)
 					pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 					break
@@ -1589,13 +2504,26 @@ function AutoFarm:Start()
 			if player:GetAttribute("Cutscene") then task.wait(0.05) continue end
 
 			-- Pause the farm while a refill trip is in progress (the refill loop
-			-- tweens the character to a station and back).
+			-- tweens the character to a station and back). A watchdog releases
+			-- the pause after 20s so a wedged refill can never leave the player
+			-- hovering above the titans and never attacking again.
 			if getgenv().KiraHub.State.Refilling then
+				local rs = getgenv().KiraHub.State.RefillSince
+				if not rs then
+					getgenv().KiraHub.State.RefillSince = os.clock()
+				elseif os.clock() - rs > 20 then
+					getgenv().KiraHub.State.Refilling = false
+					getgenv().KiraHub.State.RefillSince = nil
+					local rc = getgenv().KiraHub.Refill
+					if rc then rc.Refilling = false end
+				end
 				local c = player.Character
 				local r = c and c:FindFirstChild("HumanoidRootPart")
 				if r then r.AssemblyLinearVelocity = Vector3.zero end
 				task.wait(0.1)
 				continue
+			else
+				getgenv().KiraHub.State.RefillSince = nil
 			end
 
 			-- Old code hard-blocked here on CheckMissionExists() and on slotData.
@@ -1610,7 +2538,7 @@ function AutoFarm:Start()
 			local slotData = slotIndex and mapData and mapData.Slots and mapData.Slots[slotIndex]
 			if not slotData and not wavesMode then
 				pcall(function()
-					local ok, res = pcall(function() return getRemote:InvokeServer("Data", "Copy") end)
+					local ok, res = pcall(function() return KiraNet:Invoke(getRemote, "Data", "Copy") end)
 					if ok and res then
 						mapData = res
 						slotData = slotIndex and res.Slots and res.Slots[slotIndex]
@@ -1630,22 +2558,27 @@ function AutoFarm:Start()
 				end
 			end
 
-			-- Weapon detection: prefer the session slot, then the character
-			-- attributes / rig (Smooth style). The HUD frame is only a fallback
-			-- because it is not always present.
-			local weaponKind = slotData and slotData.Weapon
+			-- Weapon detection: the LIVE HUD is authoritative during a fight,
+			-- then the session slot, then the character rig / attributes. The
+			-- old order trusted a stale slot snapshot (or a lingering "Spears"
+			-- attribute) and could spend the whole raid classified as an empty
+			-- spear loadout, which is why the player hovered without swinging.
+			local weaponKind = GetCurrentWeapon()
 			if weaponKind ~= "Blades" and weaponKind ~= "Spears" then
-				weaponKind = KiraWeaponInfo() or "Blades"
+				weaponKind = slotData and slotData.Weapon
+			end
+			if weaponKind ~= "Blades" and weaponKind ~= "Spears" then
+				weaponKind = KiraWeaponInfo() or getgenv().KiraHub.State.Weapon or "Blades"
 			end
 			if weaponKind ~= "Blades" and weaponKind ~= "Spears" then weaponKind = "Blades" end
 			local isBlades = weaponKind == "Blades"
-			getgenv().KiraHub.State.AttackCooldownVal = isBlades and 0.15 or 1
+			getgenv().KiraHub.State.AttackCooldownVal = KiraSlashInterval
 			getgenv().KiraHub.State.Weapon = weaponKind
 
 			local playerCount = workspace:GetAttribute("Player_Count") or #Players:GetPlayers()
 			if IsToggled("SoloOnlyToggle") and playerCount > 1 then
 				self:Stop()
-				pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+				pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 				task.wait(0.5)
 				TeleportService:Teleport(LOBBY_ID, player)
 				break
@@ -1661,7 +2594,8 @@ function AutoFarm:Start()
 				or (workspace:GetAttribute("Type") or (mapData and mapData.Map and mapData.Map.Type))
 
 			local isArmoredRaid = not wavesMode and ws_ObjectiveFolder and ws_ObjectiveFolder:FindFirstChild("Armored_Boss")
-			local isFemaleRaid = not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defeat_Annie")
+			local isFemaleRaid = (not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defeat_Annie"))
+				or (not wavesMode and mapData and mapData.Map and mapData.Map.Objective == "Female Titan")
 			local femaleExists = not wavesMode and ws_ObjectiveFolder and ws_ObjectiveFolder:FindFirstChild("Female_Boss")
 			local attackExists = not wavesMode and ws_ObjectiveFolder and ws_ObjectiveFolder:FindFirstChild("Attack_Boss")
 			local armoredTitan = not wavesMode and titansFolder and titansFolder:FindFirstChild("Armored_Titan")
@@ -1672,13 +2606,46 @@ function AutoFarm:Start()
 				or (ws_ObjectiveFolder and ws_ObjectiveFolder:FindFirstChild("Colossal_Boss"))
 			)
 
-			local isDefendEren = not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defend_Eren")
-			local isDefendBoats = not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defend_Boats")
+			local isDefendEren = (not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defend_Eren"))
+				or (not wavesMode and mapData and mapData.Map and mapData.Map.Objective == "Attack Titan")
+			local isDefendBoats = (not wavesMode and rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Defend_Boats"))
+				or (not wavesMode and mapData and mapData.Map and mapData.Map.Objective == "Armored Titan")
+			local isRaidMap = not wavesMode and (
+				mapType == "Raids"
+				or isArmoredRaid or isFemaleRaid or isColossalRaid
+				or isDefendEren or isDefendBoats
+			)
 			local isRaidDefensePhase = (isDefendEren or isDefendBoats) and IsToggled("AutoFarmRaidsToggle")
 
-			if not wavesMode and isFemaleRaid and not femaleExists and not attackExists then
-				task.wait(0.05)
+			-- Missions and raids are farmed by separate toggles. Waves count as
+			-- mission content. When the matching toggle is off, stay idle.
+			local farmEnabled
+			if wavesMode then
+				farmEnabled = IsToggled("AutoKillToggle")
+			elseif isRaidMap then
+				farmEnabled = IsToggled("AutoFarmRaidsToggle")
+			else
+				farmEnabled = IsToggled("AutoKillToggle")
+			end
+			if not farmEnabled then
+				if root then root.AssemblyLinearVelocity = Vector3.zero end
+				KiraCancelFarmMove()
+				task.wait(0.25)
 				continue
+			end
+
+			if not wavesMode and isFemaleRaid and not femaleExists and not attackExists then
+				-- Female raid: only Female / Attack titans spawn. If the
+				-- objective folder has not streamed in yet but a boss model is
+				-- already there, fight it instead of idling forever.
+				local raidBoss = titansFolder and (
+					titansFolder:FindFirstChild("Female_Titan")
+					or titansFolder:FindFirstChild("Attack_Titan")
+				)
+				if not raidBoss then
+					task.wait(0.05)
+					continue
+				end
 			end
 
 			if not wavesMode and isColossalRaid then
@@ -1732,7 +2699,7 @@ function AutoFarm:Start()
 								local fallback = workspace:FindFirstChild("Cannon")
 								return fallback
 							end
-							-- Smooth Hub style cannon multi-hit: re-fire the server Impact
+							-- Kira cannon multi-hit: re-fire the server Impact
 							-- event several times per shot so one cannonball lands many hits.
 							local hitsPerShot = math.clamp(tonumber(GetOption("CannonHitsSlider", 10)) or 10, 1, 30)
 							local function fireCannonHits(ref, count)
@@ -1742,7 +2709,7 @@ function AutoFarm:Start()
 									if not self._running or not self._colossalCannon then break end
 									local napePos = getLiveNapePos()
 									if not napePos then break end
-									pcall(function() postRemote:FireServer("S_Skills", "Impact", ref, napePos) end)
+									pcall(function() KiraNet:Fire(postRemote, "S_Skills", "Impact", ref, napePos) end)
 									fired = fired + 1
 									if i < count then task.wait(0.045) end
 								end
@@ -1759,13 +2726,13 @@ function AutoFarm:Start()
 								task.spawn(function() fireCannonHits(ref, hitsPerShot) end)
 							end)
 							while self._running and not isStallComplete() do
-								pcall(function() getRemote:InvokeServer("Cannon", "State", cannonModel, true) end)
+								pcall(function() KiraNet:Invoke(getRemote, "Cannon", "State", cannonModel, true) end)
 								task.wait(0.3)
 								serverImpactAt = 0
 								local shootOk = false
 								for shootAttempt = 1, 3 do
 									shootOk = pcall(function()
-										getRemote:InvokeServer("Cannon", "Shoot", {BarrelWood = 40, Base = 0})
+										KiraNet:Invoke(getRemote, "Cannon", "Shoot", {BarrelWood = 40, Base = 0})
 									end)
 									if shootOk then break end
 									task.wait(0.1)
@@ -1780,7 +2747,7 @@ function AutoFarm:Start()
 								task.wait(1.2)
 							end
 							impactConn:Disconnect()
-							pcall(function() getRemote:InvokeServer("Cannon", "State", cannonModel, false) end)
+							pcall(function() KiraNet:Invoke(getRemote, "Cannon", "State", cannonModel, false) end)
 							self._colossalCannon = false
 						end)
 					end
@@ -1802,7 +2769,7 @@ function AutoFarm:Start()
 				local shiftReady = player:GetAttribute("Bar") and player:GetAttribute("Bar") == 100
 				if not isShifted and shiftReady then
 					repeat
-						pcall(function() getRemote:InvokeServer("S_Skills", "Usage", "999", false) end)
+						pcall(function() KiraNet:Invoke(getRemote, "S_Skills", "Usage", "999", false) end)
 						task.wait(1)
 					until not self._running or (player.Character and player.Character:GetAttribute("Shifter"))
 					continue
@@ -1837,13 +2804,13 @@ function AutoFarm:Start()
 				continue
 			end
 
-			-- Smooth "Hold Last Titan": while the wait timer is running, keep
+			-- Kira "Hold Last Titan": while the wait timer is running, keep
 			-- (alive - 1) distinct titans alive instead of freezing on the final
 			-- titan. The last titan is only released once the timer expires.
 			local holdNapes = validNapes
 			do
 				local state = getgenv().KiraHub.State
-				if not wavesMode and IsToggled("LastTitanWaitToggle") and mapType == "Missions" then
+				if not wavesMode and IsToggled("LastTitanWaitToggle") and not isRaidMap then
 					local holdTime = GetOption("LastTitanWaitSlider", 60)
 					local aliveCount = 0
 					if titansFolder then
@@ -1901,7 +2868,7 @@ function AutoFarm:Start()
 				end
 			end
 
-			-- Smooth "safe time": restart the last-titan timer whenever a fresh
+			-- Kira "safe time": restart the last-titan timer whenever a fresh
 			-- wave of titans spawns, otherwise the timer is stale across maps.
 			if getgenv().KiraHub.State._sawZeroTitans then
 				getgenv().KiraHub.State._sawZeroTitans = false
@@ -1910,7 +2877,7 @@ function AutoFarm:Start()
 				getgenv().KiraHub.State.HoldTitanZeroSince = nil
 			end
 
-			-- Smooth "Wait for Boss": do not burn the boss window on adds while
+			-- Kira "Wait for Boss": do not burn the boss window on adds while
 			-- the raid boss is still spawning / anchored / missing its hitbox.
 			if IsToggled("WaitForBossToggle") and not wavesMode and titansFolder then
 				local bossModel = nil
@@ -1969,6 +2936,8 @@ function AutoFarm:Start()
 			local closestDist, closestNape = math.huge, nil
 			local closestIsBoss = false
 			local bossDist, bossHitPoint = math.huge, nil
+			local femaleDist, femaleNape = math.huge, nil
+			local attackDist, attackNape = math.huge, nil
 			local attackTitanFound = false
 			local highestZ = -math.huge
 			local isStall = not wavesMode and mapData and mapData.Map and mapData.Map.Objective == "Stall"
@@ -1977,12 +2946,13 @@ function AutoFarm:Start()
 			for i = 1, #holdNapes do
 				local nape = holdNapes[i]
 				if not nape or not nape.Parent then continue end
-				local titanModel = nape.Parent.Parent.Parent
+				local titanModel = KiraNapeModel(nape)
 				if not KiraTitanAlive(titanModel) then continue end
 				local tName = titanModel.Name
 				local isBoss = getgenv().KiraHub.Data.BossNames[tName]
-				if not wavesMode and isArmoredRaid and not hasReinerObjective and tName == "Armored_Titan" then continue end
-				if not wavesMode and isBoss and not titanModel:GetAttribute("State") then continue end
+				-- Raid / wave bosses are always eligible targets now. The old
+				-- "no State attribute" and Armored-raid guards silently skipped
+				-- the raid boss, so the script only ever fought adds.
 				local isRoaring = not wavesMode and isBoss and (
 					titanModel:GetAttribute("Attack") == "Roar"
 					or titanModel:GetAttribute("Attack") == "Berserk_Mode"
@@ -1994,13 +2964,22 @@ function AutoFarm:Start()
 				local adjustedDist = d
 				if getgenv().KiraHub.State.TargetNape == nape then adjustedDist = adjustedDist - 15000 end
 				if useRangeLimit and d > 90000 then continue end
-				if not wavesMode and isBoss then
-					local hitPart = (titanModel:FindFirstChild("Marker") and titanModel.Marker.Adornee)
-						or titanModel.Hitboxes.Hit.Nape
+				if isBoss then
+					-- Always register on the nape, never on Marker/other body parts.
+					local hitPart = KiraNape(titanModel)
 					if hitPart and adjustedDist < bossDist then
 						bossDist = adjustedDist
 						bossHitPoint = hitPart
 						bossIsRoaring = isRoaring
+					end
+				end
+				if not wavesMode then
+					if tName == "Female_Titan" and adjustedDist < femaleDist then
+						femaleDist = adjustedDist
+						femaleNape = nape
+					elseif tName == "Attack_Titan" and adjustedDist < attackDist then
+						attackDist = adjustedDist
+						attackNape = nape
 					end
 				end
 				if isStall then
@@ -2015,28 +2994,61 @@ function AutoFarm:Start()
 			local targetPart, targetIsRoaring = nil, false
 
 			if wavesMode then
-				targetPart = closestNape
-			elseif isRaidDefensePhase then
-				targetPart = closestNape or bossHitPoint
+				-- Waves: bosses first. Previously this always took the nearest
+				-- add, so a wave boss was never touched while adds were alive.
+				targetPart = bossHitPoint or closestNape
 				targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
-			else
-				local prio = GetOption("RaidPriorityDropdown", "Boss First")
-				if prio == "Boss First" then
-					targetPart = bossHitPoint or closestNape
+			elseif isRaidMap then
+				if isFemaleRaid then
+					-- Female raid: only Female / Attack titans exist. Take the
+					-- nearest of those (Female first), then any boss nape.
+					targetPart = femaleNape or attackNape or bossHitPoint or closestNape
 					targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
-				elseif prio == "Adds First" then
+				elseif isDefendEren or isDefendBoats then
+					-- Objective defense: referencePos is the objective marker
+					-- (Eren / the boats), so nearest-to-reference is the threat.
 					targetPart = closestNape or bossHitPoint
 					targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
-				elseif prio == "Mixed" then
-					if math.random(1, 3) == 1 and bossHitPoint then
-						targetPart = bossHitPoint
-						targetIsRoaring = bossIsRoaring
-					else
+				else
+					local prio = GetOption("RaidPriorityDropdown", "Boss First")
+					if prio == "Boss First" then
+						targetPart = bossHitPoint or closestNape
+						targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
+					elseif prio == "Adds First" then
 						targetPart = closestNape or bossHitPoint
 						targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
+					elseif prio == "Mixed" then
+						if math.random(1, 3) == 1 and bossHitPoint then
+							targetPart = bossHitPoint
+							targetIsRoaring = bossIsRoaring
+						else
+							targetPart = closestNape or bossHitPoint
+							targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
+						end
+					else
+						targetPart = closestNape
+						if targetPart == bossHitPoint then targetIsRoaring = bossIsRoaring end
 					end
+				end
+			else
+				-- Missions: hit the titans in a random order. Keep the pick for a
+				-- short window so the movement tween does not thrash. When the
+				-- "Wait for last titan" hold is active, holdNapes is empty and the
+				-- final titan is deliberately left alone until the timer expires.
+				local state = getgenv().KiraHub.State
+				if #holdNapes == 0 then
+					targetPart = nil
 				else
-					targetPart = closestNape
+					local pick = state.MissionTarget
+					if not pick or not pick.Parent or (now - (state.MissionTargetAt or 0)) > 2.5
+						or not KiraTitanAlive(KiraNapeModel(pick))
+						or not table.find(holdNapes, pick)
+					then
+						pick = holdNapes[math.random(1, #holdNapes)]
+						state.MissionTarget = pick
+						state.MissionTargetAt = now
+					end
+					targetPart = pick or closestNape
 					if targetPart == bossHitPoint then targetIsRoaring = bossIsRoaring end
 				end
 			end
@@ -2055,7 +3067,7 @@ function AutoFarm:Start()
 				attackTitanSpawnTime = nil
 			end
 			local attackTitanReady = not attackTitanFound
-				or (attackTitanSpawnTime and (now - attackTitanSpawnTime) >= 5)
+				or (attackTitanSpawnTime and (now - attackTitanSpawnTime) >= 1.5)
 
 			if targetPart then
 				local currentTitanModel = targetPart
@@ -2066,16 +3078,26 @@ function AutoFarm:Start()
 				if isShifted then
 					local targetHRP = currentTitanModel and currentTitanModel:FindFirstChild("HumanoidRootPart")
 					local targetCFrame = targetHRP and targetHRP.CFrame or targetPart.CFrame
-					root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-					root.CFrame = targetCFrame * CFrame.new(0, 0, 80)
+					local state = getgenv().KiraHub.State
+					local stancePos = targetCFrame.Position - targetCFrame.LookVector * 80
+					if state.MasteryStanceTarget ~= targetPart
+						or (root.Position - stancePos).Magnitude > 30
+					then
+						state.MasteryStanceTarget = targetPart
+						KiraFarmMove(root, stancePos, 2000, targetPart, 0.5)
+					end
 					local mode = GetOption("MasteryModeDropdown", "Both")
 					local doPunch = mode == "Punching" or mode == "Both"
 					local doSkills = mode == "Skill Usage" or mode == "Both"
-					if not targetIsRoaring then
+					do
+						-- Attacks always run, even while a boss is roaring. The
+						-- old "not targetIsRoaring" gate idled the whole farm
+						-- whenever a raid boss's Attack attribute stayed on
+						-- Roar / Berserk_Mode, which is the hovering bug.
 						if doPunch and (now - lastMasteryPunch) >= 1 then
 							lastMasteryPunch = now
-							postRemote:FireServer("Attacks", "Slash", true)
-							postRemote:FireServer("Hitboxes", "Register", targetPart, nil, nil, masteryComboIndex)
+							KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+							KiraNet:Fire(postRemote, "Hitboxes", "Register", targetPart, nil, nil, masteryComboIndex)
 							masteryComboIndex = masteryComboIndex + 1
 							if masteryComboIndex > 4 then masteryComboIndex = 1 end
 						end
@@ -2090,7 +3112,7 @@ function AutoFarm:Start()
 										and idNum ~= 210 and idNum ~= 211 and idNum ~= 306
 										and idNum ~= 308 and idNum ~= 402 and idNum ~= 403 and idNum ~= 407
 									then
-										pcall(function() getRemote:InvokeServer("S_Skills", "Usage", tostring(skillId), false) end)
+										pcall(function() KiraNet:Invoke(getRemote, "S_Skills", "Usage", tostring(skillId), false) end)
 									end
 									task.wait(1)
 								end
@@ -2112,71 +3134,28 @@ function AutoFarm:Start()
 				end
 
 				local moveMode = GetOption("MovementModeDropdown", "Hover")
-				local moveSpeed = GetOption("HoverSpeedSlider", 400)
-				if moveMode ~= "Tween Farm" and getgenv().KiraHub.State.TweenFarmObj then
-					pcall(function() getgenv().KiraHub.State.TweenFarmObj:Cancel() end)
-					getgenv().KiraHub.State.TweenFarmObj = nil
-					getgenv().KiraHub.State.TweenFarmTarget = nil
-				end
-				if moveMode == "Hover" then
-					local distToTarget = (targetHeightPos - rootPos).Magnitude
-					if distToTarget < 20 then
-						local titanBasePos = titanHRP and titanHRP.Position or targetPart.Position
-						getgenv().KiraHub.State.OrbitAngle = (getgenv().KiraHub.State.OrbitAngle or 0) + 0.18
-						if getgenv().KiraHub.State.OrbitAngle > math.pi * 2 then
-							getgenv().KiraHub.State.OrbitAngle = getgenv().KiraHub.State.OrbitAngle - math.pi * 2
-						end
-						local orbitRadius = 15
-						local ang = getgenv().KiraHub.State.OrbitAngle
-						local orbitX = titanBasePos.X + math.cos(ang) * orbitRadius
-						local orbitZ = titanBasePos.Z + math.sin(ang) * orbitRadius
-						local orbitPos = Vector3.new(orbitX, targetHeightPos.Y, orbitZ)
-						root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-						root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-						root.CFrame = CFrame.new(orbitPos, Vector3.new(titanBasePos.X, orbitPos.Y, titanBasePos.Z))
-					else
-						local dir = targetHeightPos - rootPos
-						if dir.Magnitude > 1 then
-							root.AssemblyLinearVelocity = dir.Unit * moveSpeed
-						else
-							root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-						end
-					end
+				local moveSpeed = math.max(tonumber(GetOption("HoverSpeedSlider", 400)) or 400, 100)
+				local moveKey = targetPart
+				if isBlades and moveMode ~= "Teleport" then
+					-- Blades: hold 400+ studs/s of momentum (more velocity =
+					-- more blade damage) and orbit inside the attack ring
+					-- instead of tweening to a stop above the titan.
+					KiraCancelFarmMove()
+					KiraBladeMomentum(root, targetHeightPos, targetPart)
 				elseif moveMode == "Teleport" then
-					root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-					root.CFrame = CFrame.new(targetHeightPos)
-				elseif moveMode == "Tween Farm" then
-					-- Smooth Hub tween movement: one linear tween per target change,
-					-- velocity locked while it plays so gravity never fights the tween.
-					local st = getgenv().KiraHub.State
-					local speed = math.max(tonumber(moveSpeed) or 400, 100)
-					local lastTarget = st.TweenFarmTarget
-					local activeTween = st.TweenFarmObj
-					local needsTween = not activeTween
-						or activeTween.PlaybackState ~= Enum.PlaybackState.Playing
-						or not lastTarget
-						or (targetHeightPos - lastTarget).Magnitude > 6
-					if needsTween then
-						if activeTween then pcall(function() activeTween:Cancel() end) end
-						local dist = (targetHeightPos - rootPos).Magnitude
-						local dur = math.clamp(dist / speed, 0.15, 8)
-						local ok, newTween = pcall(function()
-							return TweenService:Create(
-								root,
-								TweenInfo.new(dur, Enum.EasingStyle.Linear),
-								{CFrame = CFrame.new(targetHeightPos)}
-							)
-						end)
-						if ok and newTween then
-							st.TweenFarmTarget = targetHeightPos
-							st.TweenFarmObj = newTween
-							newTween:Play()
-						else
-							pcall(function() root.CFrame = CFrame.new(targetHeightPos) end)
-						end
-					end
+					KiraCancelFarmMove()
 					root.AssemblyLinearVelocity = Vector3.zero
 					root.AssemblyAngularVelocity = Vector3.zero
+					root.CFrame = CFrame.new(targetHeightPos)
+				elseif moveMode == "Tween Farm" then
+					-- One linear tween per committed target. The Heartbeat lock
+					-- keeps gravity from fighting the tween, so no vibration.
+					KiraFarmMove(root, targetHeightPos, moveSpeed, moveKey, 8)
+				else
+					-- Hover: identical gliding tween (one linear tween per
+					-- committed target). Re-issues only when the titan has moved
+					-- more than 12 studs, so there is no per-frame snapping.
+					KiraFarmMove(root, targetHeightPos, moveSpeed, moveKey, 4)
 				end
 
 				if not attackTitanReady then task.wait(0.05) continue end
@@ -2185,80 +3164,134 @@ function AutoFarm:Start()
 				local dz = root.Position.Z - targetPart.Position.Z
 				local attackRange = GetOption("AttackRangeSlider", 150)
 				local AttackRangeSq = attackRange * attackRange
+				local bladesReady = (KiraBladesEmpty() ~= true)
+					and now >= (getgenv().KiraHub.State.BladeSettleUntil or 0)
+				local spearAmmo = KiraSpearsLeft() or 0
+				local canFallbackBlades = (#KiraBladeParts() > 0) or ((GetBladeSetCount() or 0) > 0)
+				-- If detection says "spears" but there is no fireable spear (and
+				-- the rig still has blades), swing the blades instead of idling
+				-- above the titan waiting for a refill that is not needed.
+				local useBlades = isBlades or (spearAmmo <= 0 and canFallbackBlades)
 
-				if not targetIsRoaring
-					and (dx * dx + dz * dz) <= AttackRangeSq
-					and (now - lastAttack) >= getgenv().KiraHub.State.AttackCooldownVal
-				then
-					lastAttack = now
-
-					local hitTargets = {targetPart}
-					if IsToggled("MultiHitToggle") then
-						local count = 1
-						local maxHits = GetOption("MultiHitCountSlider", 3)
-						for i = 1, #validNapes do
-							if count >= maxHits then break end
-							local n = validNapes[i]
-							if n ~= targetPart and n and n.Parent then
-								if KiraTitanAlive(n.Parent.Parent.Parent) then
-									table.insert(hitTargets, n)
-									count = count + 1
-								end
-							end
+				-- One attack per 1.05s window on the committed nape. Blade swings
+				-- follow the SH farm: safe mode is 1 nape / 1 hit request, and
+				-- Multi Hit fans out over several napes with N pairs per nape.
+				if (dx * dx + dz * dz) <= AttackRangeSq then
+					local isBoss = IsBossTarget(targetPart)
+					if useBlades then
+						if bladesReady and KiraSlashGate(now, KiraMultiHitEnabled() and 0.4 or nil) then
+							KiraBladeAttack(targetPart, holdNapes, isBoss)
 						end
-					end
-
-					-- Smooth "Combat Realism": occasionally leave one add alive.
-					if IsToggled("CombatRealismToggle") and #hitTargets > 1 and math.random() < 0.12 then
-						table.remove(hitTargets, math.random(1, #hitTargets))
-					end
-
-					if isBlades then
-						KiraNet:Fire(postRemote, "Attacks", "Slash", true)
-						local thisBoss = IsBossTarget(targetPart)
-						local damageMult = math.clamp(math.floor(GetOption("DamageMultiplierSlider", 1)), 1, 10)
-						local bladeLoops = (thisBoss and GetOption("BladeBossHitsSlider", 35) or 1) * damageMult
-
-						-- Smooth signature: Register(nape, 700..900), queued and
-						-- flushed 20/frame so hits are not rate-limit dropped.
-						for _ = 1, bladeLoops do
-							for _, nape in ipairs(hitTargets) do
-								KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, math.random(700, 900))
-							end
-						end
-					else
+					elseif KiraSlashGate(now, KiraMultiHitEnabled() and 0.6 or nil) then
 						-- Thunder spears: S_Fire expects a spear SLOT id (1..8),
-						-- NOT the remaining ammo count. Passing the ammo count was
-						-- why spear shots were rejected by the server.
-						local ammo = KiraSpearsLeft() or 0
-						if ammo > 0 then
+						-- never the remaining ammo count. One spear + its
+						-- explosion(s) per cycle, exactly like the old build.
+						if spearAmmo > 0 then
 							KiraRefreshSpearMarks()
 							local spearId = KiraPickSpearId()
+							local multi = KiraMultiHitEnabled()
+							local multiTargets
+							local reps = 1
+							if multi then
+								-- SH thunder farm: every live nape counts, and the
+								-- explosion count comes from acquireTokens() -- a
+								-- 150 events/s budget capped at 10 per target.
+								multiTargets = {}
+								for _, n in ipairs(holdNapes) do
+									if n and n.Parent then
+										multiTargets[#multiTargets + 1] = {part = n, pos = n.Position}
+									end
+								end
+								if #multiTargets == 0 then
+									multiTargets[1] = {part = targetPart, pos = targetPart.Position}
+								end
+								reps = math.max(1, math.min(10, math.floor(150 / math.max(#multiTargets, 1))))
+							else
+								if isBoss then
+									reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+								end
+								multiTargets = {{part = targetPart, pos = targetPart.Position}}
+							end
 							task.spawn(function()
-								pcall(function() getRemote:InvokeServer("Spears", "S_Fire", tostring(spearId)) end)
-								local isBoss = IsBossTarget(targetPart)
-								local loops = isBoss and (GetOption("BladeBossHitsSlider") or 35) or 1
-								for _ = 1, loops do
-									for _, nape in ipairs(hitTargets) do
-										KiraNet:Fire(postRemote, "Spears", "S_Explode", nape.Position, 0.10 + math.random() * 0.09)
+								local function unusedSpears()
+									local n = 0
+									for _, unused in pairs(KiraSpearIds()) do
+										if unused then n = n + 1 end
+									end
+									return n
+								end
+								local beforeUnused = unusedSpears()
+								local beforeAmmo = KiraSpearsLeft()
+								local okFire = pcall(function() KiraNet:Invoke(getRemote, "Spears", "S_Fire", tostring(spearId)) end)
+								if okFire then
+									local fireState = getgenv().KiraHub.State
+									fireState.SpearFires = (fireState.SpearFires or 0) + 1
+									fireState.LastSpearFireAt = os.clock()
+								end
+								if multi and okFire then
+									-- SH verifies the spear actually left the slot
+									-- before exploding; a refused shot never explodes.
+									local deadline = os.clock() + 1.0
+									local after = KiraSpearsLeft()
+									while beforeAmmo ~= nil and after ~= nil and after >= beforeAmmo
+										and os.clock() < deadline do
+										task.wait()
+										after = KiraSpearsLeft()
+									end
+									if beforeAmmo ~= nil and after ~= nil and after >= beforeAmmo then
+										table.clear(kiraUsedSpearIds)
+										getgenv().KiraHub.State.ForceSpearReset = true
+										KiraRefreshSpearMarks()
+										getgenv().KiraHub.State.RefillRequest = "Spears"
+										return
+									end
+								end
+								if not okFire then return end
+								for _ = 1, reps do
+									for _, t in ipairs(multiTargets) do
+										if t.part and t.part.Parent then
+											KiraNet:Fire(postRemote, "Spears", "S_Explode", t.pos, 0.10 + math.random() * 0.09)
+										end
+									end
+								end
+								if not multi then
+									task.wait(0.5)
+									if KiraSpearsLeft() == beforeAmmo and unusedSpears() >= beforeUnused then
+										-- The server refused the shot (the "stuck at
+										-- 1/12" bug). Free every slot mark and force
+										-- a real station refill instead of retrying.
+										table.clear(kiraUsedSpearIds)
+										getgenv().KiraHub.State.ForceSpearReset = true
+										KiraRefreshSpearMarks()
+										getgenv().KiraHub.State.RefillRequest = "Spears"
 									end
 								end
 							end)
 						else
 							-- Hand off to the refill loop (proper station refill).
-							getgenv().KiraHub.State.RefillRequest = "Spears"
-							local station = GetRefillStation(root)
-							if station then
-								KiraNet:Fire(postRemote, "Attacks", "Reload", station)
+							-- A refill that just succeeded can leave the HUD at 0
+							-- for a moment: never stack a second one.
+							if now >= (getgenv().KiraHub.State.SpearRefillCooldownUntil or 0) then
+								getgenv().KiraHub.State.RefillRequest = "Spears"
+								local station = GetRefillStation(root)
+								if station then
+									KiraNet:Fire(postRemote, "Attacks", "Reload", station)
+								end
 							end
 						end
 					end
 				end
 			else
+				KiraCancelFarmMove()
 				if root then root.AssemblyLinearVelocity = Vector3.new(0, 0, 0) end
 			end
 
 			task.wait(0.05)
+		end
+		end)
+		if not ok then
+			self._running = false
+			pcall(function() warn("[Kira Premium] farm loop error: " .. tostring(loopErr)) end)
 		end
 	end)
 end
@@ -2266,29 +3299,22 @@ end
 function AutoFarm:Stop()
 	self._running = false
 	self._colossalCannon = false
+	KiraCancelFarmMove()
 	getgenv().KiraHub.State.MissionStartTime = nil
 end
 
 local lastReloadTime = 0
 local lastRefillTime = 0
-local lastAmmoValueSeen = -1
-local lastAmmoChangeAt = 0
-local lastBladeValueSeen = -1
-local lastBladeChangeAt = 0
 local currentTrackedChar = nil
 
 player.CharacterAdded:Connect(function()
 	lastReloadTime = 0
 	lastRefillTime = 0
-	lastAmmoValueSeen = -1
-	lastAmmoChangeAt = os.clock()
-	lastBladeValueSeen = -1
-	lastBladeChangeAt = os.clock()
 	currentTrackedChar = nil
 end)
 
 -- ============================================================================
---  [KIRA] AUTO REFILL LOOP (Smooth core)
+--  [KIRA] AUTO REFILL LOOP (core)
 --  Runs whenever Auto Reload is on or Auto Farm is running. Ammo is read from
 --  the character rig/attributes, so it no longer depends on the HUD frame and
 --  no longer silently `continue`s forever when the HUD is missing.
@@ -2304,14 +3330,43 @@ task.spawn(function()
 
 		if char ~= currentTrackedChar then
 			currentTrackedChar = char
-			lastBladeValueSeen = -1
-			lastBladeChangeAt = os.clock()
 			lastReloadTime = 0
 			lastRefillTime = 0
 		end
 
 		local now = os.clock()
 		local state = getgenv().KiraHub.State
+		local weaponType = KiraWeaponInfo()
+
+		-- Thunder spear stuck detection: sometimes the server leaves the client
+		-- holding ammo it refuses to fire (stuck at "1/12"). When the count has
+		-- not moved while spears are in use, rebuild the spear marks and force
+		-- a real station refill instead of retrying the same dead slot.
+		-- This only runs after several real S_Fire attempts, and never right
+		-- after a successful refill (that is what caused double refills).
+		local spearCount = KiraSpearsLeft()
+		if spearCount ~= nil then
+			if state.LastSpearSeen ~= spearCount then
+				state.LastSpearSeen = spearCount
+				state.LastSpearChangeAt = now
+				state.SpearFires = 0
+			end
+			local spearsActive = weaponType == "Spears" or KiraHasSpearLoadout()
+			local attacking = (AutoFarm and AutoFarm._running) or IsToggled("ManualAutoAttackToggle")
+			if spearsActive and attacking and spearCount > 0
+				and (state.SpearFires or 0) >= 5
+				and now >= (state.SpearRefillCooldownUntil or 0)
+				and (now - (state.LastSpearChangeAt or now)) > 6
+				and (now - lastReloadTime) > 6
+			then
+				lastReloadTime = now
+				state.LastSpearChangeAt = now
+				table.clear(kiraUsedSpearIds)
+				state.ForceSpearReset = true
+				KiraRefreshSpearMarks()
+				pcall(function() RefillCore:ForceType("Spears") end)
+			end
+		end
 
 		KiraRefreshSpearMarks()
 		state.BladesEmpty = KiraBladesEmpty()
@@ -2323,41 +3378,42 @@ task.spawn(function()
 		local request = state.RefillRequest
 		if request then
 			state.RefillRequest = nil
-			RefillCore:Try(request)
+			if not (request == "Spears" and now < (state.SpearRefillCooldownUntil or 0)) then
+				local okRefill = pcall(function() RefillCore:Try(request) end)
+				if not okRefill then
+					-- Never let a refill error wedge the farm in "paused" state.
+					RefillCore.Refilling = false
+					state.Refilling = false
+				end
+			end
 		end
 
-		local weaponType = KiraWeaponInfo()
-
 		if weaponType == "Blades" then
+			-- Only reload once the equipped set is completely used up (every
+			-- blade on the rig is Broken). The old per-broken-blade swap fired
+			-- a Reload after every kill and burned spare sets for nothing.
 			if KiraBladesEmpty() == true then
 				local spare = KiraBladeSpare()
-				if spare and spare > 0 and (now - lastReloadTime) > 0.6 then
-					-- Smooth: swap to a spare set first, only walk to a station
-					-- once no spare sets are left.
-					lastReloadTime = now
-					lastRefillTime = now
-					pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
+				if spare and spare > 0 then
+					-- Give the game's own swap a moment first: it costs no set.
+					if KiraBladesEmptyFor() >= 1.2 and (now - lastReloadTime) > 2.5 then
+						lastReloadTime = now
+						pcall(function() KiraNet:Invoke(getRemote, "Blades", "Reload") end)
+						state.BladeSettleUntil = now + 0.7
+					end
 				elseif (now - lastRefillTime) > 1.2 then
 					lastRefillTime = now
-					RefillCore:Try("Blades")
-				end
-			else
-				-- One blade broke but sets remain: normal blade swap.
-				local broken = false
-				for _, b in ipairs(KiraBladeParts()) do
-					if b:GetAttribute("Broken") then broken = true break end
-				end
-				if broken and (now - lastReloadTime) > 0.6 then
-					lastReloadTime = now
-					pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
+					pcall(function() RefillCore:Try("Blades") end)
 				end
 			end
 
 		elseif weaponType == "Spears" then
 			local count = KiraSpearsLeft()
-			if count ~= nil and count <= 0 and (now - lastRefillTime) > 1.2 then
+			if count ~= nil and count <= 0 and (now - lastRefillTime) > 1.2
+				and now >= (state.SpearRefillCooldownUntil or 0)
+			then
 				lastRefillTime = now
-				RefillCore:Try("Spears")
+				pcall(function() RefillCore:Try("Spears") end)
 			end
 		end
 
@@ -2371,6 +3427,73 @@ task.spawn(function()
 			end
 		end)
 	end
+end)
+
+-- ============================================================================
+--  [KIRA] NO KILL LAG
+--  The stutter after a kill is the titan ragdoll: on death the humanoid breaks
+--  every joint and the client suddenly simulates a pile of loose parts. With
+--  the toggle on, titan humanoids never break their joints on death and the
+--  corpse is stripped of collision / mass, so the kill resolves without the
+--  physics spike. Client-side only: the server still sees a normal kill.
+-- ============================================================================
+task.spawn(function()
+	local seen = setmetatable({}, { __mode = "k" })
+
+	local function stripCorpse(model)
+		pcall(function()
+			for _, d in ipairs(model:GetDescendants()) do
+				if d:IsA("BasePart") then
+					d.CanCollide = false
+					d.CanTouch = false
+					d.Massless = true
+				elseif d:IsA("ParticleEmitter") then
+					d.Enabled = false
+				end
+			end
+		end)
+	end
+
+	local function disarm(model)
+		local hum = model:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		pcall(function() hum.BreakJointsOnDeath = false end)
+		if seen[model] then return end
+		seen[model] = true
+		pcall(function()
+			hum.Died:Connect(function()
+				if not IsToggled("NoKillLagToggle") then return end
+				task.defer(function()
+					if model.Parent then stripCorpse(model) end
+				end)
+			end)
+		end)
+	end
+
+	local hookedFolder, conn = nil, nil
+	while task.wait(0.5) do
+		if not getgenv().KiraHubAOTR then break end
+		if not IsToggled("NoKillLagToggle") then continue end
+		if isLobby or isMenu then continue end
+		local tf = workspace:FindFirstChild("Titans")
+		if tf ~= hookedFolder then
+			if conn then pcall(function() conn:Disconnect() end) end
+			hookedFolder = tf
+			conn = nil
+			if tf then
+				local ok, c = pcall(function()
+					return tf.ChildAdded:Connect(function(m)
+						if m:IsA("Model") and IsToggled("NoKillLagToggle") then disarm(m) end
+					end)
+				end)
+				conn = ok and c or nil
+			end
+		end
+		for _, m in ipairs(tf and tf:GetChildren() or {}) do
+			if m:IsA("Model") then disarm(m) end
+		end
+	end
+	if conn then pcall(function() conn:Disconnect() end) end
 end)
 
 task.spawn(function()
@@ -2387,19 +3510,74 @@ task.spawn(function()
 		local tf = workspace:FindFirstChild("Titans")
 		if not tf then continue end
 		local closestNape, closestDist = nil, 40
+		local nearbyNapes = {}
 		for _, t in ipairs(tf:GetChildren()) do
 			if t:IsA("Model") and KiraTitanAlive(t) then
 				local nape = KiraNape(t)
 				if nape then
 					local dist = (hrp.Position - nape.Position).Magnitude
+					if dist < 250 then table.insert(nearbyNapes, nape) end
 					if dist < closestDist then closestDist = dist closestNape = nape end
 				end
 			end
 		end
-		if closestNape then
-			KiraNet:Fire(postRemote, "Attacks", "Slash", true)
-			KiraNet:Fire(postRemote, "Hitboxes", "Register", closestNape, math.random(700, 900))
-			task.wait(0.5)
+		if closestNape and KiraSlashGate(nil, KiraMultiHitEnabled() and 0.4 or nil) then
+			-- Weapon-aware manual attack. Multi Hit ON follows the SH farm:
+			-- blades cover every nearby nape, spears explode every nearby nape.
+			local weapon = GetCurrentWeapon() or KiraWeaponInfo()
+			local isBoss = IsBossTarget(closestNape)
+			if weapon == "Spears" then
+				local ammo = KiraSpearsLeft() or 0
+				if ammo > 0 then
+					local spearId = KiraPickSpearId()
+					local multi = KiraMultiHitEnabled()
+					local targets = {}
+					if multi then
+						for _, n in ipairs(nearbyNapes) do
+							if n and n.Parent then
+								targets[#targets + 1] = {part = n, pos = n.Position}
+							end
+						end
+					end
+					if #targets == 0 then
+						targets[1] = {part = closestNape, pos = closestNape.Position}
+					end
+					local reps = 1
+					if multi then
+						reps = math.max(1, math.min(10, math.floor(150 / math.max(#targets, 1))))
+					elseif isBoss then
+						reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+					end
+					task.spawn(function()
+						local beforeAmmo = KiraSpearsLeft()
+						local okFire = pcall(function() KiraNet:Invoke(getRemote, "Spears", "S_Fire", tostring(spearId)) end)
+						if okFire then
+							local fireState = getgenv().KiraHub.State
+							fireState.SpearFires = (fireState.SpearFires or 0) + 1
+							fireState.LastSpearFireAt = os.clock()
+						end
+						if not okFire then return end
+						if multi and beforeAmmo ~= nil then
+							local deadline = os.clock() + 1.0
+							local after = KiraSpearsLeft()
+							while after ~= nil and after >= beforeAmmo and os.clock() < deadline do
+								task.wait()
+								after = KiraSpearsLeft()
+							end
+							if after ~= nil and after >= beforeAmmo then return end
+						end
+						for _ = 1, reps do
+							for _, t in ipairs(targets) do
+								if t.part and t.part.Parent then
+									KiraNet:Fire(postRemote, "Spears", "S_Explode", t.pos, 0.10 + math.random() * 0.09)
+								end
+							end
+						end
+					end)
+				end
+			else
+				KiraBladeAttack(closestNape, nearbyNapes, isBoss)
+			end
 		end
 	end
 end)
@@ -2408,7 +3586,7 @@ postRemote.OnClientEvent:Connect(function(...)
 	local args = {...}
 	if IsToggled("AutoEscapeToggle") and args[1] == "Titans" and args[2] == "Grab_Event" then
 		pcall(function() pGui.Interface.Buttons.Visible = false end)
-		postRemote:FireServer("Attacks", "Slash_Escape")
+		KiraNet:Fire(postRemote, "Attacks", "Slash_Escape")
 	end
 end)
 
@@ -2459,42 +3637,24 @@ task.spawn(function()
 	end
 end)
 
-function ForceRetry()
-	local rewardsGui = INTERFACE:FindFirstChild("Rewards")
-	if rewardsGui and rewardsGui.Visible then
-		local retryBtn = nil
-		pcall(function() retryBtn = rewardsGui.Main.Info.Main.Buttons.Retry end)
-		if not retryBtn or not retryBtn.Visible then
-			for _, btn in ipairs(rewardsGui:GetDescendants()) do
-				if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible and btn.Active then
-					if btn.Name == "Retry" or (btn:IsA("TextButton") and btn.Text:find("Retry")) then
-						retryBtn = btn
-						break
-					end
-				end
-			end
-		end
-		if retryBtn and retryBtn.Visible and retryBtn.Active then
-			UseButton(retryBtn)
-			task.wait(0.2)
-			if rewardsGui.Visible then
-				GuiService.SelectedObject = retryBtn
-				task.wait(0.1)
-				VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-				VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-			end
-			if rewardsGui.Visible then
-				local pos = retryBtn.AbsolutePosition + retryBtn.AbsoluteSize / 2
-				VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-				task.wait(0.1)
-				VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
-			end
-			return true
+function ForceRetry(force)
+	-- Force Retry is the remote path: it deliberately never clicks the Rewards
+	-- GUI. (Auto Retry is the opposite - GUI click only, no remotes.)
+	local state = getgenv().KiraHub and getgenv().KiraHub.State
+	local now = os.clock()
+	if state and not force then
+		if now - (state.LastForceRetryAt or 0) < 2.5 then return false end
+		state.LastForceRetryAt = now
+	end
+	for attempt = 1, 2 do
+		pcall(function() KiraNet:Invoke(getRemote, "Functions", "Retry", "Add") end)
+		task.wait(0.15)
+		pcall(function() KiraNet:Fire(postRemote, "Functions", "Retry") end)
+		task.wait(0.15)
+		if attempt == 1 and (INTERFACE:FindFirstChild("Rewards") == nil) then
+			break
 		end
 	end
-	pcall(function() getRemote:InvokeServer("Functions", "Retry", "Add") end)
-	task.wait(0.3)
-	pcall(function() postRemote:FireServer("Functions", "Retry") end)
 	return true
 end
 getgenv().KiraHub.ForceRetry = ForceRetry
@@ -2540,38 +3700,9 @@ function ExecuteImmediateAutomation()
 	end
 
 	if IsToggled("AutoRetryToggle") then
-		local rewardsGui = INTERFACE:FindFirstChild("Rewards")
-		if rewardsGui and rewardsGui.Visible then
-			local retryBtn = nil
-			pcall(function() retryBtn = rewardsGui.Main.Info.Main.Buttons.Retry end)
-			if not retryBtn or not retryBtn.Visible then
-				for _, btn in ipairs(rewardsGui:GetDescendants()) do
-					if (btn:IsA("TextButton") or btn:IsA("ImageButton")) and btn.Visible and btn.Active then
-						if btn.Name == "Retry" or (btn:IsA("TextButton") and btn.Text:find("Retry")) then
-							retryBtn = btn
-							break
-						end
-					end
-				end
-			end
-			if retryBtn and retryBtn.Visible and retryBtn.Active then
-				task.wait(0.5)
-				UseButton(retryBtn)
-				task.wait(0.2)
-				if rewardsGui.Visible then
-					GuiService.SelectedObject = retryBtn
-					task.wait(0.1)
-					VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-					VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-				end
-				if rewardsGui.Visible then
-					local pos = retryBtn.AbsolutePosition + retryBtn.AbsoluteSize / 2
-					VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
-					task.wait(0.1)
-					VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
-				end
-			end
-		end
+		-- GUI click only: Auto Retry presses the Rewards screen's RETRY
+		-- button and never fires the retry remotes.
+		KiraClickRewardsRetry()
 	end
 end
 
@@ -2596,7 +3727,7 @@ do
 	}
 
 	-- Robust download: game:HttpGet first, then request()/http_request() fallbacks.
-	local function KiraHttpGet(url)
+	function KiraHttpGet(url)
 		local ok, res = pcall(function() return game:HttpGet(url) end)
 		if ok and type(res) == "string" and #res > 0 then return res end
 		if type(request) == "function" then
@@ -2614,7 +3745,7 @@ do
 		return nil
 	end
 
-	local function KiraLoadModule(relPath)
+	function KiraLoadModule(relPath)
 		local loader = loadstring or load
 		if type(loader) ~= "function" then
 			lib_errors[#lib_errors + 1] = relPath .. ": loadstring unavailable"
@@ -2721,7 +3852,7 @@ function MarkDirty()
 end
 
 -- ============================================================
--- Boosted map detection (ported from Smooth Hub)
+-- Boosted map detection (ported from Kira)
 -- Reads workspace attributes first, then scans the attributes of workspace,
 -- ReplicatedStorage and the local player for anything containing "boost".
 -- Timers at or below 3 seconds are treated as expired.
@@ -2763,7 +3894,7 @@ end
 
 function BuildInfoTab(TabRef)
 	local I_Premium = TabRef:AddLeftGroupbox("Premium Status", "crown")
-	I_Premium:AddLabel("PREMIUM v2.9 (Elite Edition)", true)
+	I_Premium:AddLabel("PREMIUM v3 (Elite Edition)", true)
 	I_Premium:AddLabel("Status: ACTIVATED", true)
 	I_Premium:AddLabel("Join Discord Now!")
 	I_Premium:AddDivider()
@@ -2804,7 +3935,7 @@ function BuildInfoTab(TabRef)
 	I_Cred:AddLabel("- @dolikeverything")
 
 	local I_Upd = TabRef:AddRightGroupbox("Premium Changelog", "file-text")
-	I_Upd:AddLabel("Kira Hub Premium v2.9", true)
+	I_Upd:AddLabel("Kira Hub Premium v3", true)
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("PREMIUM FEATURES")
 	I_Upd:AddLabel("[+] Full Colossal Raid Automation")
@@ -2812,22 +3943,38 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Advanced Skin Hunter (Auto-Rejoin)")
 	I_Upd:AddLabel("[+] Complete 5-Stage TS Quest Automation")
 	I_Upd:AddLabel("[+] Live ESP with Distance & State")
-	I_Upd:AddLabel("[+] Tween Farm & Smooth Orbit Hover")
+	I_Upd:AddLabel("[+] Tween Farm & Hover Movement")
 	I_Upd:AddLabel("[+] Master Webhook System")
 	I_Upd:AddLabel("[+] Ban Status Persistence")
 	I_Upd:AddDivider()
-	I_Upd:AddLabel("v2.9 FIXES")
+	I_Upd:AddLabel("v3 FIXES")
 	I_Upd:AddLabel("[*] Full Waves farming pipeline")
 	I_Upd:AddLabel("[*] Legendary+ drop name resolution fixed")
 	I_Upd:AddLabel("[*] Personal execution + mythical logging")
 	I_Upd:AddLabel("[*] Skin Hunter now full rejoin cycle")
 	I_Upd:AddDivider()
-	I_Upd:AddLabel("v2.9 SMOOTH INTEGRATION")
+	I_Upd:AddLabel("v3 UPDATE")
 	I_Upd:AddLabel("[+] Family roller rebuilt (spins, pity, tiers)")
-	I_Upd:AddLabel("[+] Smooth auto-claim suite in Upgrades")
-	I_Upd:AddLabel("[+] Real SELECT slot switching")
+	I_Upd:AddLabel("[+] Auto-claim suite in Upgrades")
+	I_Upd:AddLabel("[+] Real SELECT slot switching + lobby teleport")
 	I_Upd:AddLabel("[+] Freedom difficulty + boosted maps")
 	I_Upd:AddLabel("[+] Hold last titan + config export/import")
+	I_Upd:AddLabel("[+] Fluid tween movement (no vibration)")
+	I_Upd:AddLabel("[+] Separate mission / raid farm priorities")
+	I_Upd:AddLabel("[+] Nape-only hits, 1.05s slash sync")
+	I_Upd:AddLabel("[+] Thunder spear stuck-reload recovery")
+	I_Upd:AddLabel("[+] Blade farm rebuilt (SH slash sync)")
+	I_Upd:AddLabel("[+] Multi Hit (Risky) = exact SH blades/TS farm")
+	I_Upd:AddLabel("[+] Boss multi hit paced (no dropped boss hits)")
+	I_Upd:AddLabel("[+] Spear refill can no longer double-trigger")
+	I_Upd:AddLabel("[+] Blades reload only when the whole set is used")
+	I_Upd:AddLabel("[+] Auto M1 + 400+ studs/s blade momentum")
+	I_Upd:AddLabel("[+] No Kill Lag (titan ragdoll stripped)")
+	I_Upd:AddLabel("[+] Blades/Spears weapon detection hardened")
+	I_Upd:AddLabel("[+] Jura font locked (configs cannot change it)")
+	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
+	I_Upd:AddLabel("[+] Auto Retry clicks RETRY, Force Retry uses remotes")
+	I_Upd:AddLabel("[+] UI font: Jura")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -2882,7 +4029,7 @@ function BuildFarmTab(TabRef)
 		Text = "Return to Lobby",
 		Func = function()
 			task.spawn(function()
-				pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+				pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 				task.wait(0.4)
 				pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 			end)
@@ -2902,7 +4049,7 @@ function BuildFarmTab(TabRef)
 		Text = "Force Retry",
 		Func = function()
 			task.spawn(function()
-				local worked = ForceRetry()
+				local worked = ForceRetry(true)
 				if worked then
 					Library:Notify({Title = "Force Retry", Description = "Rejoining the Event", Time = 2})
 				else
@@ -2941,9 +4088,10 @@ function BuildFarmTab(TabRef)
 	local F_Auto = TabRef:AddLeftGroupbox("Automation", "cpu")
 	getgenv().KiraHub.UI.Labels.Status = F_Auto:AddLabel("Status: Idle")
 
-	F_Auto:AddToggle("AutoKillToggle", {Text = "Auto Farm", Default = false})
-	Toggles.AutoKillToggle:OnChanged(function()
-		if Toggles.AutoKillToggle.Value then
+	local function KiraSyncFarmRun()
+		local missions = Toggles.AutoKillToggle and Toggles.AutoKillToggle.Value == true
+		local raids = Toggles.AutoFarmRaidsToggle and Toggles.AutoFarmRaidsToggle.Value == true
+		if missions or raids then
 			AutoFarm:Start()
 			pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Farming") end)
 		else
@@ -2951,19 +4099,21 @@ function BuildFarmTab(TabRef)
 			pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Idle") end)
 		end
 		MarkDirty()
-	end)
+	end
+
+	F_Auto:AddToggle("AutoKillToggle", {
+		Text = "Auto Farm Missions",
+		Default = false,
+		Tooltip = "Farms missions and waves. Titans are attacked in random order."
+	})
+	Toggles.AutoKillToggle:OnChanged(KiraSyncFarmRun)
 
 	F_Auto:AddToggle("AutoFarmRaidsToggle", {
 		Text = "Auto Farm Raids",
 		Default = false,
-		Tooltip = "Thunder spears recommended"
+		Tooltip = "Farms raids with objective priority (Eren / boats / Female)."
 	})
-	Toggles.AutoFarmRaidsToggle:OnChanged(function()
-		if Toggles.AutoFarmRaidsToggle.Value and not Toggles.AutoKillToggle.Value then
-			Toggles.AutoKillToggle:SetValue(true)
-		end
-		MarkDirty()
-	end)
+	Toggles.AutoFarmRaidsToggle:OnChanged(KiraSyncFarmRun)
 
 	F_Auto:AddToggle("ManualAutoAttackToggle", {
 		Text = "Manual Auto Attack",
@@ -2972,7 +4122,11 @@ function BuildFarmTab(TabRef)
 	})
 	Toggles.ManualAutoAttackToggle:OnChanged(function() MarkDirty() end)
 
-	F_Auto:AddToggle("AutoRetryToggle", {Text = "Auto Retry", Default = false})
+	F_Auto:AddToggle("AutoRetryToggle", {
+		Text = "Auto Retry",
+		Default = false,
+		Tooltip = "Clicks the Rewards screen RETRY button (GUI click, no remotes)."
+	})
 	Toggles.AutoRetryToggle:OnChanged(function() MarkDirty() end)
 
 	F_Auto:AddToggle("RetryFailedAltToggle", {
@@ -3224,17 +4378,30 @@ function BuildUtilityTab(TabRef)
 	U_Combat:AddToggle("AutoEscapeToggle", {Text = "Auto Escape Grab", Default = false})
 	Toggles.AutoEscapeToggle:OnChanged(function() MarkDirty() end)
 
-	U_Combat:AddToggle("MultiHitToggle", {Text = "Multi Hit", Default = false})
-	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddSlider("MultiHitCountSlider", {
-		Text = "Hit Count",
-		Default = 3,
-		Min = 2,
-		Max = 20,
-		Rounding = 0
+	-- Blade hits only register on a real swing, so tap M1 with each slash.
+	U_Combat:AddToggle("AutoM1Toggle", {
+		Text = "Auto M1 (Blades)",
+		Default = true,
+		Tooltip = "Blade damage only lands on a real swing: sends an M1 with every blade slash."
 	})
-	Options.MultiHitCountSlider:OnChanged(function() MarkDirty() end)
+	Toggles.AutoM1Toggle:OnChanged(function() MarkDirty() end)
+
+	-- Kill lag is the titan death ragdoll; stop the physics spike.
+	U_Combat:AddToggle("NoKillLagToggle", {
+		Text = "No Kill Lag",
+		Default = false,
+		Tooltip = "Stops titan death ragdolls / death particles so kills do not stutter."
+	})
+	Toggles.NoKillLagToggle:OnChanged(function() MarkDirty() end)
+
+	-- Multi Hit: exact SH farm behaviour for blades and thunder spears.
+	-- OFF keeps the normal safe farm (one nape, one hit request per swing).
+	U_Combat:AddToggle("MultiHitToggle", {
+		Text = "Multi Hit (Risky)",
+		Default = false,
+		Tooltip = "ON = SH farm: blades hit every nape per swing and spears explode every nape. Higher ban risk. OFF = normal safe farm."
+	})
+	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
@@ -3255,7 +4422,7 @@ function BuildUtilityTab(TabRef)
 	})
 	Options.BladeBossHitsSlider:OnChanged(function() MarkDirty() end)
 
-	-- [KIRA] Smooth-style combat / refill controls
+	-- [KIRA] Kira-style combat / refill controls
 	U_Combat:AddDropdown("RefillModeDropdown", {
 		Text = "Refill Mode",
 		Values = {"Smart", "Remote Only", "Station Only"},
@@ -3271,19 +4438,6 @@ function BuildUtilityTab(TabRef)
 		if rc then rc.LongRangeBlockedUntil = 0 rc.LongRangeFails = 0 end
 		MarkDirty()
 	end)
-
-	U_Combat:AddSlider("DamageMultiplierSlider", {
-		Text = "Damage Multiplier",
-		Default = 1,
-		Min = 1,
-		Max = 10,
-		Rounding = 0,
-		Tooltip = "Multiplies boss hit loops (Smooth-style hit spam)."
-	})
-	Options.DamageMultiplierSlider:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddToggle("CombatRealismToggle", {Text = "Combat Realism", Default = false})
-	Toggles.CombatRealismToggle:OnChanged(function() MarkDirty() end)
 
 	getgenv().KiraHub.UI.Labels.Refill = U_Combat:AddLabel("Refill: Idle")
 
@@ -3351,28 +4505,28 @@ function BuildUtilityTab(TabRef)
 
 	local U_Skills = TabRef:AddRightGroupbox("Auto Skills", "zap")
 	for skillIndex = 1, 5 do
-		local toggleName = "SmoothAutoSkill" .. skillIndex
+		local toggleName = "AutoSkill" .. skillIndex
 		U_Skills:AddToggle(toggleName, {
 			Text = "Auto Use Skill " .. skillIndex,
 			Default = false
 		})
 		Toggles[toggleName]:OnChanged(function() MarkDirty() end)
 	end
-	U_Skills:AddDropdown("SmoothAutoSkillMode", {
+	U_Skills:AddDropdown("AutoSkillMode", {
 		Values = {"Hold", "Tap"},
 		Default = "Tap",
 		Multi = false,
 		Text = "Skill Input Mode"
 	})
-	Options.SmoothAutoSkillMode:OnChanged(function() MarkDirty() end)
-	U_Skills:AddSlider("SmoothSkillDelay", {
+	Options.AutoSkillMode:OnChanged(function() MarkDirty() end)
+	U_Skills:AddSlider("SkillDelay", {
 		Text = "Skill Delay",
 		Default = 0.2,
 		Min = 0.05,
 		Max = 2,
 		Rounding = 2
 	})
-	Options.SmoothSkillDelay:OnChanged(function() MarkDirty() end)
+	Options.SkillDelay:OnChanged(function() MarkDirty() end)
 
 	local U_Feat = TabRef:AddRightGroupbox("Features", "star")
 
@@ -3537,22 +4691,22 @@ function BuildUtilityTab(TabRef)
 
 	local U_Safety = TabRef:AddRightGroupbox("Performance & Safety", "shield-check")
 
-	U_Safety:AddToggle("SmoothFPSLockToggle", {Text = "FPS Limit", Default = false})
-	Toggles.SmoothFPSLockToggle:OnChanged(function() MarkDirty() end)
-	U_Safety:AddSlider("SmoothFPSLimit", {
+	U_Safety:AddToggle("FpsLockToggle", {Text = "FPS Limit", Default = false})
+	Toggles.FpsLockToggle:OnChanged(function() MarkDirty() end)
+	U_Safety:AddSlider("FpsLimit", {
 		Text = "FPS Cap",
 		Default = 144,
 		Min = 15,
 		Max = 360,
 		Rounding = 0
 	})
-	Options.SmoothFPSLimit:OnChanged(function() MarkDirty() end)
-	U_Safety:AddToggle("SmoothAntiAdminToggle", {
+	Options.FpsLimit:OnChanged(function() MarkDirty() end)
+	U_Safety:AddToggle("AntiAdminToggle", {
 		Text = "Leave if Admin Joins",
 		Default = false,
 		Tooltip = "Attempts to leave the current server when a configured admin is detected"
 	})
-	Toggles.SmoothAntiAdminToggle:OnChanged(function() MarkDirty() end)
+	Toggles.AntiAdminToggle:OnChanged(function() MarkDirty() end)
 end
 
 function BuildUpgradesTab(TabRef)
@@ -3687,7 +4841,7 @@ function BuildUpgradesTab(TabRef)
 	M_Prestige:AddLabel("Requires max level in the lobby", true)
 
 	-- ============================================================
-	-- Auto Claim (ported from Smooth Hub)
+	-- Auto Claim (ported from Kira)
 	-- ============================================================
 	local M_Claim = TabRef:AddRightGroupbox("Auto Claim (Lobby)", "check-circle")
 	getgenv().KiraHub.UI.Labels.AutoClaimStatus = M_Claim:AddLabel("Claim status: Idle")
@@ -4002,7 +5156,7 @@ function BuildRaidsTab(TabRef)
 	R_Hunter:AddLabel("Deus Ex Machina/Equinox → Stohess", true)
 end
 
--- Family data (ported from Symbiote Hub). Tier names come from the game's
+-- Family data (ported from the community). Tier names come from the game's
 -- Families module; a static fallback keeps the dropdown usable everywhere.
 do
 	local Data = getgenv().KiraHub.Data
@@ -4078,7 +5232,11 @@ function BuildGlobalTab(TabRef)
 
 	G_Slots:AddToggle("AutoSelectSlotToggle", {Text = "Auto Select Slot", Default = false})
 	Toggles.AutoSelectSlotToggle:OnChanged(function()
-		getgenv().KiraHub.State.AutoSlotBusy = false
+		local state = getgenv().KiraHub.State
+		state.AutoSlotBusy = false
+		state.SlotSelectClicked = false
+		state.SlotSelectDone = false
+		state.SlotLobbyTryAt = 0
 		MarkDirty()
 	end)
 
@@ -4141,7 +5299,7 @@ function BuildMarketTab(TabRef)
 				if isActive then
 					local idx = getgenv().KiraHub.Data.BoostIndexMap[boostName]
 					if idx then
-						pcall(function() getRemote:InvokeServer("S_Market", "Buy", "1_Boosts", idx, amount) end)
+						pcall(function() KiraNet:Invoke(getRemote, "S_Market", "Buy", "1_Boosts", idx, amount) end)
 						bought = bought + 1
 						task.wait(0.3)
 					end
@@ -4173,7 +5331,7 @@ function BuildMarketTab(TabRef)
 			local used = 0
 			for boostName, isActive in pairs(selected) do
 				if isActive then
-					pcall(function() getRemote:InvokeServer("S_Inventory", "Item", boostName) end)
+					pcall(function() KiraNet:Invoke(getRemote, "S_Inventory", "Item", boostName) end)
 					used = used + 1
 					task.wait(0.3)
 				end
@@ -4216,7 +5374,7 @@ function BuildMarketTab(TabRef)
 				return
 			end
 			local amount = Options.MarketSpinAmountSlider.Value or 1
-			pcall(function() getRemote:InvokeServer("S_Market", "Buy", "Spins", pack, amount) end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Market", "Buy", "Spins", pack, amount) end)
 			Library:Notify({Title = "Market", Description = "Bought " .. amount .. "x " .. size .. " Spins", Time = 3})
 		end)
 	end})
@@ -4250,7 +5408,7 @@ function BuildMarketTab(TabRef)
 				Library:Notify({Title = "Market", Description = "Select a crate first", Time = 3})
 				return
 			end
-			pcall(function() getRemote:InvokeServer("S_Market", "Buy", "Crates", idx, amount) end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Market", "Buy", "Crates", idx, amount) end)
 			Library:Notify({Title = "Market", Description = "Bought " .. amount .. "x " .. tostring(crate), Time = 3})
 		end)
 	end})
@@ -4271,7 +5429,7 @@ function BuildMarketTab(TabRef)
 		task.spawn(function()
 			local crate = Options.CrateSelectDropdown.Value
 			if not crate then return end
-			local ok, res = pcall(function() return getRemote:InvokeServer("S_Inventory", "Crate", crate) end)
+			local ok, res = pcall(function() return KiraNet:Invoke(getRemote, "S_Inventory", "Crate", crate) end)
 			if ok and res then
 				Library:Notify({Title = "Crates", Description = "Opened: " .. tostring(crate), Time = 3})
 			else
@@ -4379,13 +5537,13 @@ function BuildWebhooksTab(TabRef)
 		PostWebhook(url, {
 			embeds = {{
 				title = "Kira Hub Premium | Test Webhook",
-				description = "Secure communication link verified.\n**Premium Edition v2.9**",
+				description = "Secure communication link verified.\n**Premium Edition v3**",
 				color = statusColor,
 				fields = {
 					{name = "Player", value = player.Name, inline = true},
 					{name = "Ban Status", value = banStatus, inline = true}
 				},
-				footer = {text = "Kira Hub Premium v2.9"},
+				footer = {text = "Kira Hub Premium v3"},
 				timestamp = DateTime.now():ToIsoDate()
 			}}
 		})
@@ -4624,6 +5782,10 @@ function KiraApplyConfig(text)
 		end
 	end
 	MarkDirty()
+	-- A config can never change the font: re-assert Jura after applying.
+	pcall(function()
+		if Library and Library.SetFont then Library:SetFont(Enum.Font.Jura) end
+	end)
 	return applied
 end
 
@@ -4776,10 +5938,10 @@ function BuildSettingsTab(TabRef)
 	})
 end
 
--- Auto Prestige worker (ported from Smooth Hub). Scoped to avoid top-level locals.
+-- Auto Prestige worker (ported from Kira). Scoped to avoid top-level locals.
 do
-	local prestigeBoostText = { Luck = "luckboost", Gold = "goldboost", EXP = "expboost" }
-	local prestigeClickers = {
+	prestigeBoostText = { Luck = "luckboost", Gold = "goldboost", EXP = "expboost" }
+	prestigeClickers = {
 		function(obj)
 			if type(firesignal) ~= "function" then return false end
 			return pcall(firesignal, obj.Activated)
@@ -4802,11 +5964,11 @@ do
 		end,
 	}
 
-	local function PrestigeNormalize(text)
+	function PrestigeNormalize(text)
 		return tostring(text or ""):gsub("<[^>]->", ""):lower():gsub("[^%w]", "")
 	end
 
-	local function PrestigeStatus(text)
+	function PrestigeStatus(text)
 		local labels = getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
 		local label = labels and labels.AutoPrestigeStatus
 		if label then
@@ -4814,7 +5976,7 @@ do
 		end
 	end
 
-	local function PrestigeVisible(obj)
+	function PrestigeVisible(obj)
 		local ref = obj
 		while ref and ref ~= pGui do
 			if ref:IsA("GuiObject") and not ref.Visible then return false end
@@ -4824,7 +5986,7 @@ do
 		return true
 	end
 
-	local function PrestigePath(...)
+	function PrestigePath(...)
 		local ref = pGui
 		for _, name in ipairs({...}) do
 			ref = ref and ref:FindFirstChild(name)
@@ -4832,7 +5994,7 @@ do
 		return ref
 	end
 
-	local function PrestigeHasText(obj, needle)
+	function PrestigeHasText(obj, needle)
 		needle = PrestigeNormalize(needle)
 		if obj:IsA("TextButton") and PrestigeNormalize(obj.Text) == needle then return true end
 		for _, item in ipairs(obj:GetDescendants()) do
@@ -4845,7 +6007,7 @@ do
 		return false
 	end
 
-	local function PrestigeAncestorHasText(obj, needle)
+	function PrestigeAncestorHasText(obj, needle)
 		needle = PrestigeNormalize(needle)
 		local parent = obj and obj.Parent
 		for _ = 1, 5 do
@@ -4862,7 +6024,7 @@ do
 		return false
 	end
 
-	local function PrestigeFindButton(target, filter)
+	function PrestigeFindButton(target, filter)
 		local wanted = PrestigeNormalize(target)
 		for _, item in ipairs(pGui:GetDescendants()) do
 			if item:IsA("GuiButton") and PrestigeVisible(item)
@@ -4875,7 +6037,7 @@ do
 		return nil
 	end
 
-	local function PrestigeFindLabel(target)
+	function PrestigeFindLabel(target)
 		local wanted = PrestigeNormalize(target)
 		for _, item in ipairs(pGui:GetDescendants()) do
 			if item:IsA("TextLabel") and PrestigeVisible(item)
@@ -4887,17 +6049,17 @@ do
 		return nil
 	end
 
-	local function PrestigeFindYes()
+	function PrestigeFindYes()
 		return PrestigeFindButton("YES", function(btn)
 			return PrestigeAncestorHasText(btn, "areyousureyouwanttoprestige")
 		end)
 	end
 
-	local function PrestigeLevel()
+	function PrestigeLevel()
 		return tonumber(player:GetAttribute("Prestige")) or 0
 	end
 
-	local function PrestigeLevelFull()
+	function PrestigeLevelFull()
 		local label = PrestigePath("Interface", "Equipment", "Prestige", "Progress", "Level")
 		if not (label and label:IsA("TextLabel")) then
 			return false, "Prestige page not found"
@@ -4911,14 +6073,14 @@ do
 		return false, ("Level not full ( %s / %s )"):format(tostring(a), tostring(b))
 	end
 
-	local function PrestigeClick(obj, methodIndex)
+	function PrestigeClick(obj, methodIndex)
 		if not obj or not obj.Parent or not PrestigeVisible(obj) then return false end
 		local method = prestigeClickers[methodIndex or 1]
 		if not method then return false end
 		return (pcall(method, obj))
 	end
 
-	local function PrestigeWait(getter, done, seconds)
+	function PrestigeWait(getter, done, seconds)
 		local deadline = os.clock() + (seconds or 10)
 		local methodIndex = 1
 		while os.clock() < deadline and IsToggled("AutoPrestigeToggle") do
@@ -4939,7 +6101,7 @@ do
 		return done()
 	end
 
-	local function PrestigeCardButton(label)
+	function PrestigeCardButton(label)
 		local boostTexts = {"luckboost", "goldboost", "expboost"}
 		local parents = {}
 		local ref = label
@@ -4971,15 +6133,15 @@ do
 		return nil
 	end
 
-	local function PrestigeFindFinish()
+	function PrestigeFindFinish()
 		return PrestigeFindButton("FINISH")
 	end
 
-	local function PrestigeFindNext()
+	function PrestigeFindNext()
 		return PrestigeFindButton("NEXT")
 	end
 
-	local function RunPrestige(phase)
+	function RunPrestige(phase)
 		local st = getgenv().KiraHub.State
 		st.PrestigeBusy = true
 		local ok, failAt = pcall(function()
@@ -5117,7 +6279,7 @@ do
 	end)
 end
 
--- Smooth Hub compatibility workers. Scoped to avoid adding to the script's top-level local count.
+-- Kira compatibility workers. Scoped to avoid adding to the script's top-level local count.
 do
 	local skillKeys = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five}
 	local nextSkillAt = {0, 0, 0, 0, 0}
@@ -5129,15 +6291,15 @@ do
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			if not humanoid or humanoid.Health <= 0 then continue end
 			for index = 1, 5 do
-				if IsToggled("SmoothAutoSkill" .. index) and os.clock() >= nextSkillAt[index] then
+				if IsToggled("AutoSkill" .. index) and os.clock() >= nextSkillAt[index] then
 					local key = skillKeys[index]
-					local mode = GetOption("SmoothAutoSkillMode", "Tap")
+					local mode = GetOption("AutoSkillMode", "Tap")
 					pcall(function()
 						VirtualInputManager:SendKeyEvent(true, key, false, game)
 						task.wait(mode == "Hold" and 0.5 or 0.06)
 						VirtualInputManager:SendKeyEvent(false, key, false, game)
 					end)
-					nextSkillAt[index] = os.clock() + math.clamp(tonumber(GetOption("SmoothSkillDelay", 0.2)) or 0.2, 0.05, 2)
+					nextSkillAt[index] = os.clock() + math.clamp(tonumber(GetOption("SkillDelay", 0.2)) or 0.2, 0.05, 2)
 					task.wait(0.1)
 				end
 			end
@@ -5148,8 +6310,8 @@ do
 	end)
 
 	local adminHopRequested = false
-	local function CheckForAdmin(candidate)
-		if not IsToggled("SmoothAntiAdminToggle") or not candidate or candidate == player then return end
+	function CheckForAdmin(candidate)
+		if not IsToggled("AntiAdminToggle") or not candidate or candidate == player then return end
 		local isAdmin = false
 		pcall(function()
 			isAdmin = candidate.UserId == game.CreatorId
@@ -5166,7 +6328,7 @@ do
 	task.spawn(function()
 		while getgenv().KiraHubAOTR do
 			task.wait(3)
-			if IsToggled("SmoothAntiAdminToggle") then
+			if IsToggled("AntiAdminToggle") then
 				for _, candidate in ipairs(Players:GetPlayers()) do
 					CheckForAdmin(candidate)
 					if adminHopRequested then break end
@@ -5177,13 +6339,13 @@ do
 		end
 	end)
 
-	local function ApplyFPSLimit()
-		if not IsToggled("SmoothFPSLockToggle") then
+	function ApplyFPSLimit()
+		if not IsToggled("FpsLockToggle") then
 			local reset = setfpscap or set_fps_cap or setfps
 			if type(reset) == "function" then pcall(reset, 9999) end
 			return
 		end
-		local limit = math.clamp(math.floor(tonumber(GetOption("SmoothFPSLimit", 144)) or 144), 15, 360)
+		local limit = math.clamp(math.floor(tonumber(GetOption("FpsLimit", 144)) or 144), 15, 360)
 		local cap = setfpscap or set_fps_cap or setfps
 		if type(cap) == "function" then
 			pcall(cap, limit)
@@ -5197,7 +6359,7 @@ do
 		local lastSignature = ""
 		while getgenv().KiraHubAOTR do
 			task.wait(2)
-			local signature = tostring(IsToggled("SmoothFPSLockToggle")) .. ":" .. tostring(GetOption("SmoothFPSLimit", 144))
+			local signature = tostring(IsToggled("FpsLockToggle")) .. ":" .. tostring(GetOption("FpsLimit", 144))
 			if signature ~= lastSignature then
 				lastSignature = signature
 				pcall(ApplyFPSLimit)
@@ -5241,13 +6403,38 @@ pcall(function()
 		AccentColor = Color3.fromRGB(255, 185, 50),
 		BackgroundColor = Color3.fromRGB(22, 22, 22),
 		OutlineColor = Color3.fromRGB(52, 52, 52),
-		FontFace = "Jura", Enum.FontWeight.Medium
+		FontFace = Enum.Font.Jura
 	})
 end)
 
 pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
 pcall(function() ThemeManager:LoadDefault() end)
 pcall(function() SaveManager:LoadAutoloadConfig() end)
+-- UI font: Jura, permanently. Obsidian's SetFont takes a Font enum and
+-- re-applies it to every label/button already in its registry. Wrap it so any
+-- saved theme / config that selects another face is coerced back to Jura
+-- instead of overriding it.
+do
+	local baseSetFont = Library and Library.SetFont
+	if type(baseSetFont) == "function" then
+		Library.SetFont = function(self, ...)
+			return baseSetFont(self, Enum.Font.Jura)
+		end
+	end
+	pcall(function() Library:SetFont(Enum.Font.Jura) end)
+	pcall(function()
+		Library.Scheme.Font = Font.fromEnum(Enum.Font.Jura)
+		Library:UpdateColorsUsingRegistry()
+	end)
+end
+-- Late autoload / theme loads can land a tick after start-up; keep re-asserting
+-- for the first few seconds so nothing can stick another font.
+task.spawn(function()
+	for _ = 1, 10 do
+		task.wait(1)
+		pcall(function() Library:SetFont(Enum.Font.Jura) end)
+	end
+end)
 pcall(function()
 	if getgenv().KiraHub.LoadKeybinds then getgenv().KiraHub.LoadKeybinds() end
 end)
@@ -5330,14 +6517,6 @@ function GetPerkXP(rarity, level)
 	return (baseXP[rarity] or 0) * math.max(level, 1)
 end
 
-local PerkLevelXP = {
-	Common = {50, 100, 150, 200, 250, 300, 350, 400, 450, 500},
-	Rare = {125, 250, 375, 500, 625, 750, 875, 1000, 1125, 1250},
-	Epic = {250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2250, 2500},
-	Legendary = {500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000},
-	Secret = {2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000}
-}
-
 function ScrapeMissionRewards()
 	local data = {Stats = {}, Total = {}, Items = {}, Special = {}}
 	local dropsData = {}
@@ -5351,7 +6530,7 @@ function ScrapeMissionRewards()
 	end
 	
 	pcall(function()
-		local res = getRemote:InvokeServer("S_Rewards", "Get", true)
+		local res = KiraNet:Invoke(getRemote, "S_Rewards", "Get", true)
 		if res and res.Obtained then
 			local ob = res.Obtained
 			if ob.Gold and ob.Gold > 0 then data.Items["Gold"] = tostring(ob.Gold) end
@@ -5386,7 +6565,7 @@ function ScrapeMissionRewards()
 	end)
 
 	pcall(function()
-		local res2 = getRemote:InvokeServer("S_Rewards", "Get", true)
+		local res2 = KiraNet:Invoke(getRemote, "S_Rewards", "Get", true)
 		if res2 and res2.Obtained and res2.Obtained.Perks then
 			for _, pn in ipairs(res2.Obtained.Perks) do
 				local rarity = GetPerkRarity(pn)
@@ -5659,7 +6838,7 @@ function DispatchMissionWebhook(data)
 					inline = false
 				}
 			},
-			footer = {text = "Kira Hub Premium v2.9 | Elite Edition"},
+			footer = {text = "Kira Hub Premium v3 | Elite Edition"},
 			timestamp = DateTime.now():ToIsoDate()
 		}}
 	})
@@ -5734,7 +6913,7 @@ if rewards then
 		pcall(function() writefile(CFG_GAMES, tostring(getgenv().KiraHub.State.GamesPlayed)) end)
 		
 		pcall(function()
-			local res = getRemote:InvokeServer("S_Rewards", "Get", true)
+			local res = KiraNet:Invoke(getRemote, "S_Rewards", "Get", true)
 			if res and res.Obtained then
 				getgenv().KiraHub.State.TotalGold = getgenv().KiraHub.State.TotalGold + (res.Obtained.Gold or 0)
 				getgenv().KiraHub.State.TotalGems = getgenv().KiraHub.State.TotalGems + (res.Obtained.Gems or 0)
@@ -5804,7 +6983,7 @@ if rewards then
 			returnCounter = returnCounter + 1
 			if returnCounter >= GetOption("ReturnAfterGamesSlider", 10) then
 				writefile(CFG_RETURN_COUNTER, "0")
-				task.spawn(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+				task.spawn(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 				task.wait(0.5)
 				TeleportService:Teleport(LOBBY_ID, player)
 				return
@@ -5834,7 +7013,7 @@ end)
 
 function GetTSSlotData()
 	local slot = player:GetAttribute("Slot")
-	local ok, result = pcall(function() return getRemote:InvokeServer("Functions", "Settings", "Blur", "Off") end)
+	local ok, result = pcall(function() return KiraNet:Invoke(getRemote, "Functions", "Settings", "Blur", "Off") end)
 	if ok and type(result) == "table" and result.Slots then
 		return slot and result.Slots[slot] or result.Slots.A
 	end
@@ -5922,7 +7101,7 @@ function ClaimTSQuestRewards()
 	for _, stage in ipairs(getgenv().KiraHub.Data.TSStages) do
 		local current, rewarded, active = GetTSQuestProgress(stage.Tag)
 		if active and not rewarded and current >= stage.Amount then
-			local ok, result = pcall(getRemote.InvokeServer, getRemote, "Functions", "Quest", stage.Tag, "Spears")
+			local ok, result = pcall(KiraNet.Invoke, KiraNet, getRemote, "Functions", "Quest", stage.Tag, "Spears")
 			if ok and result ~= nil then
 				claimed = claimed + 1
 			end
@@ -6016,21 +7195,21 @@ function ExecuteTSQuestLoop()
 		end
 		if myMission then
 			if myMission.Name ~= stage.Map then
-				pcall(function() getRemote:InvokeServer("S_Missions", "Leave") end)
+				pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Leave") end)
 				task.wait(1)
 			else
 				if stage.AllMods then
 					for _, mod in ipairs(getgenv().KiraHub.Data.AllModifiers) do
-						pcall(function() getRemote:InvokeServer("S_Missions", "Modify", mod) end)
+						pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Modify", mod) end)
 					end
 					task.wait(0.3)
 				end
-				pcall(function() getRemote:InvokeServer("S_Missions", "Start") end)
+				pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Start") end)
 				task.wait(5)
 			end
 		else
 			pcall(function()
-				getRemote:InvokeServer("S_Missions", "Create", {
+				KiraNet:Invoke(getRemote, "S_Missions", "Create", {
 					Difficulty = stage.Difficulty or "Aberrant",
 					Type = "Missions",
 					Name = stage.Map,
@@ -6042,7 +7221,7 @@ function ExecuteTSQuestLoop()
 	else
 		if stage.ForceRemote then
 			pcall(function()
-				getRemote:InvokeServer(stage.ForceRemote[1], stage.ForceRemote[2], stage.ForceRemote[3])
+				KiraNet:Invoke(getRemote, stage.ForceRemote[1], stage.ForceRemote[2], stage.ForceRemote[3])
 			end)
 		end
 		if stage.CollectCrates then
@@ -6084,10 +7263,10 @@ function CreateRaidForSkinHunter(raidMapName)
 	
 	if registeredMission then
 		if registeredMission.Name == raidMapName then
-			pcall(function() getRemote:InvokeServer("S_Missions", "Start") end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Start") end)
 			return true
 		else
-			pcall(function() getRemote:InvokeServer("S_Missions", "Leave") end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Leave") end)
 			task.wait(1)
 		end
 	end
@@ -6098,7 +7277,7 @@ function CreateRaidForSkinHunter(raidMapName)
 	for _, diff in ipairs(difficulties) do
 		if not IsToggled("SkinHunterToggle") then return false end
 		pcall(function()
-			getRemote:InvokeServer("S_Missions", "Create", {
+			KiraNet:Invoke(getRemote, "S_Missions", "Create", {
 				Difficulty = diff,
 				Type = "Raids",
 				Name = raidMapName,
@@ -6117,7 +7296,7 @@ function CreateRaidForSkinHunter(raidMapName)
 		
 		if created then
 			task.wait(0.5)
-			pcall(function() getRemote:InvokeServer("S_Missions", "Start") end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Start") end)
 			return true
 		end
 	end
@@ -6126,14 +7305,7 @@ function CreateRaidForSkinHunter(raidMapName)
 end
 
 function ForceRetryToRejoin()
-	local rewardsGui = INTERFACE:FindFirstChild("Rewards")
-	if rewardsGui and rewardsGui.Visible then
-		return ForceRetry()
-	end
-	pcall(function() getRemote:InvokeServer("Functions", "Retry", "Add") end)
-	task.wait(0.3)
-	pcall(function() postRemote:FireServer("Functions", "Retry") end)
-	return true
+	return ForceRetry(true)
 end
 
 function ExecuteSkinHunterLoop()
@@ -6203,7 +7375,7 @@ function ExecuteSkinHunterLoop()
 					ForceRetryToRejoin()
 					task.wait(3)
 					if not workspace:FindFirstChild("Titans") then
-						pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+						pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 						task.wait(0.5)
 						pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 					end
@@ -6217,7 +7389,7 @@ function ExecuteSkinHunterLoop()
 				ForceRetryToRejoin()
 				task.wait(3)
 				if not workspace:FindFirstChild("Titans") then
-					pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+					pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 					task.wait(0.5)
 					pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 				end
@@ -6235,7 +7407,7 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- Family rolling (ported from Symbiote Hub)
+-- Family rolling (ported from the community)
 -- ============================================================
 function GetFamilyUI()
 	local cust = INTERFACE:FindFirstChild("Customisation")
@@ -6290,7 +7462,7 @@ function KiraFamilyNotify(name, tier)
 		title.Position = UDim2.new(0, 22, 0, 7)
 		title.BackgroundTransparency = 1
 		title.TextColor3 = Color3.fromRGB(80, 220, 150)
-		title.Font = Enum.Font.GothamBold
+		title.Font = Enum.Font.Jura
 		title.TextSize = 14
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		title.Parent = frame
@@ -6301,7 +7473,7 @@ function KiraFamilyNotify(name, tier)
 		sub.Position = UDim2.new(0, 22, 0, 27)
 		sub.BackgroundTransparency = 1
 		sub.TextColor3 = Color3.fromRGB(245, 240, 255)
-		sub.Font = Enum.Font.GothamMedium
+		sub.Font = Enum.Font.Jura
 		sub.TextSize = 12
 		sub.TextXAlignment = Enum.TextXAlignment.Left
 		sub.Parent = frame
@@ -6338,7 +7510,7 @@ function SendFamilyWebhook(familyString, tier)
 				{name = "💎 Tier", value = tostring(tier), inline = true},
 				{name = "🛡️ Ban Status", value = liveBan, inline = false}
 			},
-			footer = {text = "Kira Hub Premium v2.9"},
+			footer = {text = "Kira Hub Premium v3"},
 			timestamp = DateTime.now():ToIsoDate()
 		}}
 	})
@@ -6385,7 +7557,7 @@ function ExecuteFamilySpin()
 				setStatus("Rolling (" .. mode .. ")...")
 
 				local ok, result, result1, result2, result3, result4 = pcall(function()
-					return getRemote:InvokeServer("Family", "Roll", mode)
+					return KiraNet:Invoke(getRemote, "Family", "Roll", mode)
 				end)
 
 				local spinsTable, gotFamily, pityTable, luckVal
@@ -6417,7 +7589,7 @@ function ExecuteFamilySpin()
 						local title = famUI:FindFirstChild("Family")
 						title = title and title:FindFirstChild("Title")
 						if title and title:IsA("TextLabel") then
-							title.Text = string.upper(gotFamily) .. " (" .. tier .. ")"
+							title.Text = string.upper(tostring(gotFamily)) .. " (" .. tier .. ")"
 							title.Visible = true
 						end
 					end)
@@ -6493,9 +7665,9 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- Auto Claim (ported from Smooth Hub)
+-- Auto Claim (ported from Kira)
 -- ============================================================
-local KiraClaim = {
+KiraClaim = {
 	cooldowns = setmetatable({}, {__mode = "k"}),
 	stats = {Main = 0, Side = 0, Weekly = 0, Daily = 0, Ach = 0},
 	lastDaily = -math.huge,
@@ -6503,7 +7675,7 @@ local KiraClaim = {
 	lastAchOpen = -math.huge,
 	lastLog = 0,
 }
-local KIRA_CLAIM_COOLDOWN = 300
+KIRA_CLAIM_COOLDOWN = 300
 
 function KiraClaimFindInterface()
 	return pGui:FindFirstChild("Interface")
@@ -6596,7 +7768,7 @@ function KiraClaimQuests()
 					if key and IsToggled(key) and not KiraClaimOnCooldown(item) then
 						KiraClaim.cooldowns[item] = os.clock()
 						local ok, result = pcall(function()
-							return getRemote:InvokeServer("Functions", "Quest", tostring(tag), tostring(category))
+							return KiraNet:Invoke(getRemote, "Functions", "Quest", tostring(tag), tostring(category))
 						end)
 						if ok and result ~= nil then
 							KiraClaim.stats[tostring(category)] = (KiraClaim.stats[tostring(category)] or 0) + 1
@@ -6631,7 +7803,7 @@ function KiraClaimAchievements()
 			if ok and shouldClaim then
 				KiraClaim.cooldowns[item] = os.clock()
 				local ok2, result = pcall(function()
-					return getRemote:InvokeServer("S_Achievements", "Claim", id)
+					return KiraNet:Invoke(getRemote, "S_Achievements", "Claim", id)
 				end)
 				if ok2 and result ~= nil then
 					KiraClaim.stats.Ach = KiraClaim.stats.Ach + 1
@@ -6652,7 +7824,7 @@ function KiraClaimDailyDirect()
 	for i = 1, 3 do
 		if not (getgenv().KiraHubAOTR and IsToggled("AutoClaimDaily")) then break end
 		local ok, result = pcall(function()
-			return getRemote:InvokeServer("Functions", "Quest", "Daily " .. i, "Daily")
+			return KiraNet:Invoke(getRemote, "Functions", "Quest", "Daily " .. i, "Daily")
 		end)
 		if ok and result ~= nil then
 			KiraClaim.stats.Daily = KiraClaim.stats.Daily + 1
@@ -6883,7 +8055,7 @@ function ExecuteAutoEquipMetaPerks()
 		for _, item in ipairs(metaCache) do
 			if not usedIds[item.id] then
 				local ok, success = pcall(function()
-					return getRemote:InvokeServer("S_Equipment", "Perk_State", item.id, "Equip", "Offense")
+					return KiraNet:Invoke(getRemote, "S_Equipment", "Perk_State", item.id, "Equip", "Offense")
 				end)
 				if ok and success then
 					usedIds[item.id] = true
@@ -6900,7 +8072,7 @@ function ExecuteAutoEquipMetaPerks()
 		for _, item in ipairs(metaCache) do
 			if not usedIds[item.id] then
 				local ok, success = pcall(function()
-					return getRemote:InvokeServer("S_Equipment", "Perk_State", item.id, "Equip", "Body")
+					return KiraNet:Invoke(getRemote, "S_Equipment", "Perk_State", item.id, "Equip", "Body")
 				end)
 				if ok and success then
 					usedIds[item.id] = true
@@ -6914,7 +8086,7 @@ function ExecuteAutoEquipMetaPerks()
 	
 	if changed then
 		pcall(function()
-			local data = getRemote:InvokeServer("Data", "Copy")
+			local data = KiraNet:Invoke(getRemote, "Data", "Copy")
 			if data then mapData = data end
 		end)
 	end
@@ -6947,7 +8119,7 @@ function ExecuteAutoDeletePerks()
 	
 	if #deleteQueue > 0 then
 		local ok, result = pcall(function()
-			return getRemote:InvokeServer("S_Equipment", "Delete", "Perk", deleteQueue)
+			return KiraNet:Invoke(getRemote, "S_Equipment", "Delete", "Perk", deleteQueue)
 		end)
 		if ok and result then
 			Library:Notify({Title = "Delete Perks", Description = "Purged " .. #deleteQueue .. " junk perks", Time = 3})
@@ -6968,7 +8140,7 @@ function ExecuteAutoUpgradeGear()
 	for _, upg in ipairs(allUpgrades) do
 		if not IsToggled("AutoUpgradeToggle") then break end
 		pcall(function()
-			getRemote:InvokeServer("S_Equipment", "Upgrade", {upg})
+			KiraNet:Invoke(getRemote, "S_Equipment", "Upgrade", {upg})
 		end)
 		task.wait(0.3)
 	end
@@ -7016,7 +8188,7 @@ function ExecuteAutoEnhancePerks()
 	if count == 0 then return end
 	
 	local ok, result = pcall(function()
-		return getRemote:InvokeServer("S_Equipment", "Enhance", equippedId, foodDict)
+		return KiraNet:Invoke(getRemote, "S_Equipment", "Enhance", equippedId, foodDict)
 	end)
 	
 	if ok and result then
@@ -7024,7 +8196,7 @@ function ExecuteAutoEnhancePerks()
 	end
 end
 
-local SkillPaths = {
+SkillPaths = {
 	Blades = {
 		Damage = {"1","2","3","4","5","6","7","8","9","10","11","12","13","26","27","28","29","30","31","32","33","34","35","36","37"},
 		Critical = {"1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25"}
@@ -7081,7 +8253,7 @@ function ExecuteAutoSkillTree()
 		for _, skillId in ipairs(path) do
 			if not IsToggled("AutoSkillTreeToggle") then return end
 			pcall(function()
-				getRemote:InvokeServer("S_Equipment", "Unlock", {skillId})
+				KiraNet:Invoke(getRemote, "S_Equipment", "Unlock", {skillId})
 			end)
 			task.wait(0.2)
 		end
@@ -7089,7 +8261,7 @@ function ExecuteAutoSkillTree()
 end
 
 -- ============================================================
--- Auto Select Slot (exact Smooth Hub character selection)
+-- Auto Select Slot (exact Kira character selection)
 -- Presses the SELECT button under the chosen SLOT label.
 -- ============================================================
 function KiraSlotText(obj)
@@ -7209,7 +8381,18 @@ function KiraSlotSetStatus(text)
 end
 
 function KiraSlotTrySelect(letter)
+	local state = getgenv().KiraHub.State
+	state.SlotSelectClicked = false
+
+	-- Wait (briefly) for the SELECT button to stream in before touching it.
 	local button = KiraSlotFind(letter)
+	local waitUntil = os.clock() + 5
+	while not button and os.clock() < waitUntil do
+		if not getgenv().KiraHubAOTR then return false end
+		KiraSlotSetStatus("Waiting for Slot " .. letter .. " to load...")
+		task.wait(0.2)
+		button = KiraSlotFind(letter)
+	end
 	if not button then
 		KiraSlotSetStatus("Slot " .. letter .. " UI not found")
 		return false
@@ -7235,14 +8418,17 @@ function KiraSlotTrySelect(letter)
 		end
 	end
 
-	for attempt = 1, 3 do
+	-- Exactly two SELECT attempts: one press, one mouse click. After that the
+	-- caller fires the lobby teleport remote no matter what the screen shows.
+	for attempt = 1, 2 do
 		if not getgenv().KiraHubAOTR then return false end
 		button = KiraSlotFind(letter)
 		if not button then
 			if not KiraSlotScreenVisible() then return true end
 			break
 		end
-		KiraSlotSetStatus(("Selecting Slot %s... (try %d/3)"):format(letter, attempt))
+		KiraSlotSetStatus(("Selecting Slot %s... (click %d/2)"):format(letter, attempt))
+		state.SlotSelectClicked = true
 		if attempt == 2 then
 			KiraSlotMouseClick(button)
 		else
@@ -7258,10 +8444,43 @@ function KiraSlotTrySelect(letter)
 	return not KiraSlotScreenVisible()
 end
 
+function KiraTeleportLobby(reason)
+	local state = getgenv().KiraHub.State
+	if state.SlotTeleporting then return end
+	state.SlotTeleporting = true
+	KiraSlotSetStatus(reason or "Slot selected - teleporting to lobby...")
+
+	pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby", nil) end)
+	task.wait(0.5)
+	pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
+	task.wait(0.5)
+	if game.PlaceId ~= LOBBY_ID then
+		pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
+	end
+
+	state.SlotTeleporting = false
+	KiraSlotSetStatus("Slot selected")
+end
+
 function ExecuteAutoSelectSlot()
 	local state = getgenv().KiraHub.State
-	if state.AutoSlotBusy then return end
+	if state.SlotTeleporting then return end
 	if not IsToggled("AutoSelectSlotToggle") then return end
+	if not (isMenu or isLobby) then return end
+
+	-- Only act once the toggle has actually selected a slot. If the select
+	-- screen is gone and the place is still the menu, push the lobby teleport
+	-- (throttled) so the script never just sits on the character screen.
+	if not KiraSlotScreenVisible() then
+		if state.SlotSelectDone and game.PlaceId ~= LOBBY_ID
+			and (os.clock() - (state.SlotLobbyTryAt or 0)) > 8
+		then
+			state.SlotLobbyTryAt = os.clock()
+			KiraTeleportLobby("Teleporting to lobby...")
+		end
+		return
+	end
+	if state.AutoSlotBusy then return end
 
 	local selectedSlot = tostring(GetOption("SelectSlotDropdown", "Slot A") or "Slot A")
 	local letter = string.sub(selectedSlot, -1)
@@ -7270,12 +8489,19 @@ function ExecuteAutoSelectSlot()
 	state.AutoSlotBusy = true
 	local ok, result = pcall(KiraSlotTrySelect, letter)
 	state.AutoSlotBusy = false
+	state.SlotSelectDone = true
 	if ok and result then
-		KiraSlotSetStatus("Selected Slot " .. letter)
-	elseif ok then
-		KiraSlotSetStatus("Could not select Slot " .. letter .. " - retrying")
+		-- Let the slot click settle for 1s before asking the server for the
+		-- lobby (was 2s - the slot register is already confirmed by now).
+		task.wait(1)
+		KiraTeleportLobby(("Slot %s selected - teleporting to lobby..."):format(letter))
+	elseif ok and state.SlotSelectClicked then
+		-- Clicked twice and the screen is still up: force the lobby remote.
+		task.wait(1)
+		KiraTeleportLobby(("Slot %s not ready - forcing lobby teleport..."):format(letter))
 	else
-		KiraSlotSetStatus("Select error: " .. tostring(result))
+		state.SlotSelectDone = false
+		KiraSlotSetStatus("Waiting for slot screen...")
 	end
 end
 
@@ -7289,7 +8515,7 @@ function ExecuteAutoEquipBlade()
 	
 	local slotData = profile.Slots[slot]
 	if slotData.Weapon and slotData.Weapon ~= "Blades" then
-		pcall(function() getRemote:InvokeServer("S_Equipment", "Weapon", "Blades") end)
+		pcall(function() KiraNet:Invoke(getRemote, "S_Equipment", "Weapon", "Blades") end)
 		Library:Notify({Title = "Auto Equip", Description = "Switched to Blades", Time = 2})
 	end
 end
@@ -7301,7 +8527,7 @@ function ExecuteAutoEquipThunder()
 	if not slot or not profile or not profile.Slots or not profile.Slots[slot] then return end
 	local slotData = profile.Slots[slot]
 	if slotData.Weapon and slotData.Weapon ~= "Spears" then
-		pcall(function() getRemote:InvokeServer("S_Equipment", "Weapon", "Spears") end)
+		pcall(function() KiraNet:Invoke(getRemote, "S_Equipment", "Weapon", "Spears") end)
 		Library:Notify({Title = "Auto Equip", Description = "Switched to Thunder Spears", Time = 2})
 	end
 end
@@ -7345,7 +8571,7 @@ function HandleWavesTSBuy()
 	local count = tonumber(label.Text:match("(%d+)")) or 0
 	if count == 0 then
 		pcall(function()
-			getRemote:InvokeServer("Waves", "Shop", "Buy", "Thunder Spears")
+			KiraNet:Invoke(getRemote, "Waves", "Shop", "Buy", "Thunder Spears")
 		end)
 	end
 end
@@ -7365,7 +8591,7 @@ function HandleWavesBaseUpgrades()
 		if whitelist[upg] and now >= (state.BaseUpgradeRetryAt[upg] or 0) then
 			state.BaseUpgradeCursor = (index % #names) + 1
 			local ok, result = pcall(function()
-				return getRemote:InvokeServer("Waves", "Upgrade", {upg})
+				return KiraNet:Invoke(getRemote, "Waves", "Upgrade", {upg})
 			end)
 			-- Rotate through upgrades even on failures; a failed purchase is retried
 			-- after a cooldown instead of blocking all later upgrades.
@@ -7385,7 +8611,7 @@ function HandleWavesBlessing()
 	if not IsWavesMode() then return end
 	
 	pcall(function()
-		getRemote:InvokeServer("Waves", "Blessing", "Spin")
+		KiraNet:Invoke(getRemote, "Waves", "Blessing", "Spin")
 	end)
 end
 
@@ -7402,7 +8628,7 @@ function HandleAutoStartWaves()
 				or wavesFrame:FindFirstChild("Interact")
 			if startBtn then UseButton(startBtn) end
 		end
-		postRemote:FireServer("Waves", "Update")
+		KiraNet:Fire(postRemote, "Waves", "Update")
 	end)
 end
 
@@ -7418,7 +8644,7 @@ function HandleAutoWavesUpgrade()
 	for _, upg in ipairs(upgrades) do
 		if not IsToggled("AutoWavesUpgradeToggle") and not IsToggled("AutoShopWavesToggle") then break end
 		pcall(function()
-			getRemote:InvokeServer("Equipment", "Upgrade", {upg})
+			KiraNet:Invoke(getRemote, "Equipment", "Upgrade", {upg})
 		end)
 		task.wait(0.3)
 	end
@@ -7546,8 +8772,8 @@ function HandleAutoLeaveAtWave()
 	local state = getgenv().KiraHub.State
 	if os.clock() < (state.NextLeaveWaveAt or 0) then return end
 	state.NextLeaveWaveAt = os.clock() + 20
-	pcall(function() getRemote:InvokeServer("S_Missions", "Leave") end)
-	pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
+	pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Leave") end)
+	pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
 	if game.PlaceId ~= LOBBY_ID then
 		pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 	end
@@ -7584,7 +8810,7 @@ function HandleAutoBuyBoosts()
 			local id = getgenv().KiraHub.Data.BoostIndexMap[name]
 			if id then
 				pcall(function()
-					getRemote:InvokeServer("S_Market", "Buy", "1_Boosts", id, quantity)
+					KiraNet:Invoke(getRemote, "S_Market", "Buy", "1_Boosts", id, quantity)
 				end)
 				task.wait(0.5)
 			end
@@ -7600,7 +8826,7 @@ function HandleAutoUsePotions()
 	for name, active in pairs(whitelist) do
 		if active then
 			pcall(function()
-				getRemote:InvokeServer("S_Inventory", "Item", name)
+				KiraNet:Invoke(getRemote, "S_Inventory", "Item", name)
 			end)
 			task.wait(0.5)
 		end
@@ -7618,7 +8844,7 @@ function HandleAutoBuySpins()
 	if packId then
 		local amount = GetOption("MarketSpinAmountSlider", 1)
 		pcall(function()
-			getRemote:InvokeServer("S_Market", "Buy", "Spins", packId, amount)
+			KiraNet:Invoke(getRemote, "S_Market", "Buy", "Spins", packId, amount)
 		end)
 	end
 end
@@ -7633,7 +8859,7 @@ function HandleAutoBuyCrates()
 	
 	if idx then
 		pcall(function()
-			getRemote:InvokeServer("S_Market", "Buy", "Crates", idx, amount)
+			KiraNet:Invoke(getRemote, "S_Market", "Buy", "Crates", idx, amount)
 		end)
 	end
 end
@@ -7644,7 +8870,7 @@ function HandleAutoOpenCrates()
 	local crateName = GetOption("CrateSelectDropdown", nil)
 	if not crateName then return end
 	
-	local ok, res = pcall(function() return getRemote:InvokeServer("S_Inventory", "Crate", crateName) end)
+	local ok, res = pcall(function() return KiraNet:Invoke(getRemote, "S_Inventory", "Crate", crateName) end)
 	if not (ok and res) then
 		SetToggle("AutoOpenCratesToggle", false)
 	end
@@ -7711,7 +8937,7 @@ function ExecuteAutoStartLogic()
 	
 	for _, mission in ipairs(ReplicatedStorage.Missions:GetChildren()) do
 		if mission:FindFirstChild("Leader") and mission.Leader.Value == player.Name then
-			pcall(function() getRemote:InvokeServer("S_Missions", "Leave") end)
+			pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Leave") end)
 		end
 	end
 	
@@ -7754,7 +8980,7 @@ function ExecuteAutoStartLogic()
 		for _, diff in ipairs(diffOrder) do
 			if not IsToggled("AutoStartToggle") then break end
 			pcall(function()
-				getRemote:InvokeServer("S_Missions", "Create", {
+				KiraNet:Invoke(getRemote, "S_Missions", "Create", {
 					Difficulty = diff,
 					Type = missionType == "Raids" and "Raids" or missionType,
 					Name = mapName,
@@ -7768,7 +8994,7 @@ function ExecuteAutoStartLogic()
 		end
 	else
 		pcall(function()
-			getRemote:InvokeServer("S_Missions", "Create", {
+			KiraNet:Invoke(getRemote, "S_Missions", "Create", {
 				Difficulty = difficulty,
 				Type = missionType == "Raids" and "Raids" or missionType,
 				Name = mapName,
@@ -7789,14 +9015,14 @@ function ExecuteAutoStartLogic()
 	end
 	
 	for _, modifier in ipairs(activeMods) do
-		pcall(function() getRemote:InvokeServer("S_Missions", "Modify", modifier) end)
+		pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Modify", modifier) end)
 	end
 	task.wait(0.5)
 	
 	local startDelay = GetOption("StartDelaySlider", 0)
 	if startDelay > 0 then task.wait(startDelay) end
 	
-	pcall(function() getRemote:InvokeServer("S_Missions", "Start") end)
+	pcall(function() KiraNet:Invoke(getRemote, "S_Missions", "Start") end)
 	task.wait(5)
 end
 
@@ -7957,14 +9183,21 @@ task.spawn(function()
 					rewardStuckTime = rewardStuckTime + 0.5
 					if rewardStuckTime >= GetOption("RetryFailedTimeoutSlider", 10) then
 						if AutoFarm._running then AutoFarm:Stop() end
-						for i = 1, 6 do
-							pcall(function() getRemote:InvokeServer("Functions", "Teleport", "Lobby") end)
-							task.wait(0.3)
+						-- Retry through the remotes first. Only fall back to the
+						-- lobby teleport if the results screen is still stuck.
+						ForceRetry(true)
+						task.wait(2)
+						local stillUp = INTERFACE:FindFirstChild("Rewards")
+						if stillUp and stillUp.Visible then
+							for i = 1, 6 do
+								pcall(function() KiraNet:Invoke(getRemote, "Functions", "Teleport", "Lobby") end)
+								task.wait(0.3)
+							end
+							task.wait(1)
+							pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
+							task.wait(5)
 						end
-						task.wait(1)
-						pcall(function() TeleportService:Teleport(LOBBY_ID, player) end)
 						rewardStuckTime = 0
-						task.wait(5)
 					end
 				else
 					rewardStuckTime = 0
@@ -7982,10 +9215,10 @@ function SaveAllStates()
 			dropdowns = {},
 			theme = {
 				FontFace = "Jura",
-				FontWeight = "Medium"
+				FontWeight = "Regular"
 			},			
 			inputs = {},
-			_version = "v2.9"
+			_version = "v3"
 		}
 
 		if Toggles then
@@ -8165,7 +9398,7 @@ pcall(ScrapeLobbyStats)
 
 Library:Notify({
 	Title = "KIRA HUB Premium ",
-	Description = "Premium Edition v2.9 loaded successfully!\nWelcome to Premium.",
+	Description = "Premium Edition v3 loaded successfully!\nWelcome to Premium.",
 	Time = 6
 })
 
