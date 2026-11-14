@@ -718,7 +718,7 @@ function GetMyMission()
 end
 
 -- ============================================================================
---  [KIRA AC] BEHAVIORAL GOVERNOR  ("Human Mode")
+--  [KIRA AC] BEHAVIORAL GOVERNOR  ("Safe Mode")
 --  ---------------------------------------------------------------------------
 --  The server does not scan files, it classifies behaviour. These are the five
 --  things it can actually see, and how this block shapes each one:
@@ -726,12 +726,13 @@ end
 --   1. clear speed  -> minimum clear time on the final titan + swing duty cycle
 --   2. movement     -> BodyVelocity glide at 180-250 studs/s on a curved path;
 --                      no instant HumanoidRootPart.CFrame snaps
---   3. attack spam  -> real 3D strike-range gate (8-25 studs) and a cadence
+--   3. attack spam  -> real 3D strike-range gate (8-18 studs) and a cadence
 --                      that follows the blade attack speed
 --   4. fixed timing -> every cadence is jittered, nothing is metronomic
---   5. 24/7 uptime  -> session breaks of 3-5 minutes every N runs
+--   5. 24/7 uptime  -> a 5-7 minute break after every 7 runs
 --
---  Tunables live in the "Behavioral Safety" groupbox.
+--  One switch controls all of it: "Safe Mode". With it on, the preset below is
+--  forced; with it off the script behaves exactly like stock v3.
 -- ============================================================================
 local KiraAC = {
 	Enabled = true,
@@ -742,9 +743,31 @@ getgenv().KiraHub.AC = KiraAC
 
 function KiraAC.on()
 	local ui = getgenv().KiraHub and getgenv().KiraHub.UI
-	local t = ui and ui.Toggles and ui.Toggles.HumanModeToggle
+	local t = ui and ui.Toggles and ui.Toggles.SafeModeToggle
 	if t then return t.Value == true end
 	return KiraAC.Enabled == true
+end
+
+-- The preset Safe Mode installs. Chosen so a swing always lands while staying
+-- well under a server-side "that hit was too far away" check.
+function KiraAC.safePreset()
+	return {
+		range = 12,       -- studs; real blade arc is ~12-14
+		minRun = 1.5,     -- minutes; a human raid is not faster than this
+		breakRuns = 7,    -- runs between breaks
+		breakMins = 6,    -- base break length; randomized to 5-7
+	}
+end
+
+-- Every safe-mode knob is clamped to its safe band, so dragging a slider to a
+-- silly value can never turn Safe Mode into an unsafe config.
+function KiraAC.cfg()
+	local p = KiraAC.safePreset()
+	local range = math.clamp(tonumber(GetOption("SwingRangeSlider", p.range)) or p.range, 8, 18)
+	local minRun = math.clamp(tonumber(GetOption("MinRunTimeSlider", p.minRun)) or p.minRun, 1, 6)
+	local breakRuns = math.clamp(math.floor(tonumber(GetOption("BreakRunsSlider", p.breakRuns)) or p.breakRuns), 3, 20)
+	local breakMins = math.clamp(tonumber(GetOption("BreakLengthSlider", p.breakMins)) or p.breakMins, 3, 10)
+	return { range = range, minRun = minRun, breakRuns = breakRuns, breakMins = breakMins }
 end
 
 function KiraAC.rand(minV, maxV)
@@ -758,10 +781,10 @@ function KiraAC.jitter(base, pct)
 end
 
 function KiraAC.strikeRange()
-	return tonumber(GetOption("StrikeRangeSlider", 14)) or 14
+	return KiraAC.cfg().range
 end
 
--- Cadence per swing type. When Human Mode is off the old fixed values return
+-- Cadence per swing type. When Safe Mode is off the old fixed values return
 -- so the toggle is a true A/B switch.
 function KiraAC.swingInterval(kind)
 	if not KiraAC.on() then
@@ -931,12 +954,11 @@ function KiraAC.hold()
 		return false, nil
 	end
 
-	if IsToggled("MinClearTimeToggle") then
-		local want = (tonumber(GetOption("MinClearMinutesSlider", 2.75)) or 2.75) * 60
+	if KiraAC.runElapsed() > 25 then
+		local want = KiraAC.cfg().minRun * 60
 		-- Only pace the end of a run: wait for the opening 25s so the bot never
 		-- idles at spawn, and only hold while exactly one titan is left.
-		if want > 1 and KiraAC.runElapsed() > 25
-			and KiraAC.aliveTitans() == 1 and KiraAC.runElapsed() < want then
+		if want > 1 and KiraAC.aliveTitans() == 1 and KiraAC.runElapsed() < want then
 			return true, "clear"
 		end
 	end
@@ -959,29 +981,28 @@ end
 function KiraAC.onRunComplete()
 	KiraAC.runStart()
 	local st = getgenv().KiraHub and getgenv().KiraHub.State
-	if not st or not KiraAC.on() or not IsToggled("SessionBreakToggle") then return end
+	if not st or not KiraAC.on() then return end
+	local cfg = KiraAC.cfg()
 	st.ACRuns = (st.ACRuns or 0) + 1
-	local every = math.max(1, math.floor(tonumber(GetOption("BreakEverySlider", 7)) or 7))
-	if st.ACRuns < every then return end
+	if st.ACRuns < cfg.breakRuns then return end
 	st.ACRuns = 0
-	local mins = tonumber(GetOption("BreakLengthSlider", 4)) or 4
-	st.ACBreakUntil = os.clock() + mins * 60 * KiraAC.rand(0.85, 1.15)
+	-- Base break length +/- 1 minute: 6 -> 5-7 minutes.
+	local mins = KiraAC.rand(math.max(2, cfg.breakMins - 1), cfg.breakMins + 1)
+	st.ACBreakUntil = os.clock() + mins * 60
 end
 
 function KiraAC.status()
 	local st = getgenv().KiraHub and getgenv().KiraHub.State
-	if not st or not KiraAC.on() then return "Human mode: off" end
+	if not st or not KiraAC.on() then return "Safe mode: off" end
 	local now = os.clock()
 	if st.ACBreakUntil and now < st.ACBreakUntil then
-		return string.format("Human mode: break %ds", math.floor(st.ACBreakUntil - now))
+		return string.format("Safe mode: break %ds", math.floor(st.ACBreakUntil - now))
 	end
-	if IsToggled("MinClearTimeToggle") then
-		local want = (tonumber(GetOption("MinClearMinutesSlider", 2.75)) or 2.75) * 60
-		if KiraAC.aliveTitans() == 1 and KiraAC.runElapsed() < want then
-			return string.format("Human mode: pacing %ds", math.floor(want - KiraAC.runElapsed()))
-		end
+	local want = KiraAC.cfg().minRun * 60
+	if KiraAC.aliveTitans() == 1 and KiraAC.runElapsed() < want then
+		return string.format("Safe mode: pacing %ds", math.floor(want - KiraAC.runElapsed()))
 	end
-	return "Human mode: active"
+	return "Safe mode: active"
 end
 
 function TeleportToPart(part, offset)
@@ -3033,7 +3054,7 @@ function AutoFarm:Start()
 					targetHeightPos = targetPart.Position + Vector3.new(0, floatHeight, 0)
 				end
 				if KiraAC.on() and targetPart and targetPart.Parent then
-					-- Human mode: approach the nape itself instead of parking 250
+					-- Safe mode: approach the nape itself instead of parking 250
 					-- studs above the titan and swinging from the sky.
 					targetHeightPos = KiraAC.approachPoint(targetPart, root)
 				end
@@ -4492,70 +4513,66 @@ function BuildUtilityTab(TabRef)
 
 	getgenv().KiraHub.UI.Labels.HoldTitan = U_Feat:AddLabel("Hold timer: idle")
 
-	local U_AC = TabRef:AddRightGroupbox("Behavioral Safety", "shield-check")
+	local U_AC = TabRef:AddRightGroupbox("Safe Mode", "shield-check")
 
-	U_AC:AddToggle("HumanModeToggle", {
-		Text = "Human Mode (anti-detection)",
+	U_AC:AddToggle("SafeModeToggle", {
+		Text = "Safe Mode",
 		Default = true,
-		Tooltip = "Physics movement, strike-range gate, jittered cadence, min clear time and session breaks."
+		Tooltip = "Recommended settings that keep you under the radar. Turn it off for full speed."
 	})
-	Toggles.HumanModeToggle:OnChanged(function()
-		KiraAC.Enabled = Toggles.HumanModeToggle.Value == true
-		if not KiraAC.Enabled then
+	Toggles.SafeModeToggle:OnChanged(function()
+		KiraAC.Enabled = Toggles.SafeModeToggle.Value == true
+		if KiraAC.Enabled then
+			-- Turning it on installs the safe preset so the sliders show what is
+			-- actually being used. Sliders still work, but only inside safe limits.
+			local p = KiraAC.safePreset()
+			pcall(function() SetOption("SwingRangeSlider", p.range) end)
+			pcall(function() SetOption("MinRunTimeSlider", p.minRun) end)
+			pcall(function() SetOption("BreakRunsSlider", p.breakRuns) end)
+			pcall(function() SetOption("BreakLengthSlider", p.breakMins) end)
+		else
 			KiraAC.stop(player.Character and player.Character:FindFirstChild("HumanoidRootPart"))
 		end
 		MarkDirty()
 	end)
 
-	U_AC:AddSlider("StrikeRangeSlider", {
-		Text = "Strike range (studs)",
-		Default = 14,
+	U_AC:AddSlider("SwingRangeSlider", {
+		Text = "Attack distance (studs)",
+		Default = 12,
 		Min = 8,
-		Max = 25,
+		Max = 18,
 		Rounding = 0,
-		Tooltip = "Only swing when the nape is this close. 10-15 is realistic."
+		Tooltip = "Only swing when the titan is this close. 12 is the sweet spot."
 	})
-	Options.StrikeRangeSlider:OnChanged(function() MarkDirty() end)
+	Options.SwingRangeSlider:OnChanged(function() MarkDirty() end)
 
-	U_AC:AddToggle("MinClearTimeToggle", {
-		Text = "Minimum clear time",
-		Default = true,
-		Tooltip = "Holds the last titan until the run has lasted long enough."
-	})
-	Toggles.MinClearTimeToggle:OnChanged(function() MarkDirty() end)
-
-	U_AC:AddSlider("MinClearMinutesSlider", {
-		Text = "Min clear time (min)",
-		Default = 2.75,
+	U_AC:AddSlider("MinRunTimeSlider", {
+		Text = "Minimum run time (min)",
+		Default = 1.5,
 		Min = 1,
 		Max = 6,
-		Rounding = 2,
-		Tooltip = "A raid that should take 2-3 minutes must not end in 20 seconds."
+		Rounding = 1,
+		Tooltip = "The bot waits before the last kill so a run never looks impossibly fast."
 	})
-	Options.MinClearMinutesSlider:OnChanged(function() MarkDirty() end)
+	Options.MinRunTimeSlider:OnChanged(function() MarkDirty() end)
 
-	U_AC:AddToggle("SessionBreakToggle", {
-		Text = "Session breaks",
-		Default = true,
-		Tooltip = "Takes a 3-5 minute break every N runs instead of farming 24/7."
-	})
-	Toggles.SessionBreakToggle:OnChanged(function() MarkDirty() end)
-
-	U_AC:AddSlider("BreakEverySlider", {
-		Text = "Break every (runs)",
+	U_AC:AddSlider("BreakRunsSlider", {
+		Text = "Take a break after (runs)",
 		Default = 7,
 		Min = 3,
 		Max = 20,
-		Rounding = 0
+		Rounding = 0,
+		Tooltip = "How many runs before the bot stops for a while."
 	})
-	Options.BreakEverySlider:OnChanged(function() MarkDirty() end)
+	Options.BreakRunsSlider:OnChanged(function() MarkDirty() end)
 
 	U_AC:AddSlider("BreakLengthSlider", {
 		Text = "Break length (min)",
-		Default = 4,
-		Min = 2,
-		Max = 8,
-		Rounding = 0
+		Default = 6,
+		Min = 3,
+		Max = 10,
+		Rounding = 0,
+		Tooltip = "Roughly this long, give or take a minute."
 	})
 	Options.BreakLengthSlider:OnChanged(function() MarkDirty() end)
 
@@ -9065,7 +9082,7 @@ function UpdateStateLabels()
 		getgenv().KiraHub.UI.Labels.SessCrashes:SetText("Crashes Detected: " .. tostring(getgenv().KiraHub.State.Crashes))
 		local holdLabel = getgenv().KiraHub.UI.Labels.HoldTitan
 		if holdLabel then
-			local acText = "Human mode: off"
+			local acText = "Safe mode: off"
 			pcall(function() acText = KiraAC.status() end)
 			if IsToggled("LastTitanWaitToggle") then
 				local left = math.floor(tonumber(getgenv().KiraHub.State.HoldSafeLeft) or 0)
