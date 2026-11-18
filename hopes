@@ -28972,7 +28972,7 @@ do
 	v1700:Header({
 		Name = "Movimento"
 	})
-	v1582(v1700, "Velocidade do voo", "FarmSpeed", 100, 500, 280, " studs/s", function(p299)
+	v1582(v1700, "Velocidade do voo", "FarmSpeed", 100, 1200, 280, " studs/s", function(p299)
 		t32.SpeedBy.Missions = p299
 		t32.ApplyMove()
 	end)
@@ -29098,7 +29098,7 @@ do
 	v1579(v1707, "Titan Form Skill", "TitanSkillRaid", false, function(p311)
 		t29.TSkillSet("Raids", p311)
 	end)
-	v1582(v1707, "Velocidade do voo (Raid)", "RaidFarmSpeed", 100, 500, v1550("FarmSpeed", 280), " studs/s", function(p312)
+	v1582(v1707, "Velocidade do voo (Raid)", "RaidFarmSpeed", 100, 1200, v1550("FarmSpeed", 280), " studs/s", function(p312)
 		t32.SpeedBy.Raids = p312
 		t32.ApplyMove()
 	end)
