@@ -1419,7 +1419,7 @@ function KiraBladeTargets(targetPart, validNapes)
 	if not KiraMultiHitEnabled() then return list end
 
 	-- SH defaultThunderTargets() is 20; the blade list is that many napes.
-	local want = KiraLH.MultiHitMax()
+	local want = KiraEngine.MultiHitMax()
 	local candidates = {}
 	for _, n in ipairs(validNapes or {}) do
 		if n ~= targetPart and n and n.Parent then
@@ -1450,7 +1450,7 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 	-- every blade attack taps M1 before the Slash + Register burst.
 	KiraM1()
 
-	local bossHits = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+	local bossHits = math.clamp(math.floor(KiraEngine.BossMult()), 1, 60)
 
 	-- KiraNet's queue holds 800 events; stop well before it overflows.
 	local sent = 0
@@ -1574,13 +1574,8 @@ function RefillCore:Try(forceKind, forceNow)
 		return Done()
 	end
 
-	local mode = GetOption("RefillModeDropdown", "Smart")
-	if mode ~= "Station Only" and mode ~= "Remote Only" then mode = "Smart" end
-	local allowRemote = (mode ~= "Station Only")
-	local allowStation = (mode ~= "Remote Only")
-	local longRangeAllowed = allowRemote
-		and IsToggled("RefillFarToggle")
-		and os.clock() >= self.LongRangeBlockedUntil
+	-- Refills always fly to a station and press the reload prompt.
+	local allowRemote, allowStation, longRangeAllowed = true, true, false
 
 	local post = postRemote
 	if not (post and post.Parent) then
@@ -2125,18 +2120,14 @@ function AutoFarm:Start()
 				or isArmoredRaid or isFemaleRaid or isColossalRaid
 				or isDefendEren or isDefendBoats
 			)
-			local isRaidDefensePhase = (isDefendEren or isDefendBoats) and IsToggled("AutoFarmRaidsToggle")
+			local isRaidDefensePhase = (isDefendEren or isDefendBoats)
+				and (IsToggled("AutoFarmRaidsToggle") or IsToggled("AutoKillToggle"))
 
 			-- Missions and raids are farmed by separate toggles. Waves count as
 			-- mission content. When the matching toggle is off, stay idle.
-			local farmEnabled
-			if wavesMode then
-				farmEnabled = IsToggled("AutoKillToggle")
-			elseif isRaidMap then
-				farmEnabled = IsToggled("AutoFarmRaidsToggle")
-			else
-				farmEnabled = IsToggled("AutoKillToggle")
-			end
+			-- One Auto Farm switch covers missions, raids and waves.
+			local farmEnabled = IsToggled("AutoKillToggle")
+				or IsToggled("AutoFarmRaidsToggle")
 			if not farmEnabled then
 				if root then root.AssemblyLinearVelocity = Vector3.zero end
 				KiraCancelFarmMove()
@@ -2158,7 +2149,7 @@ function AutoFarm:Start()
 				end
 			end
 
-			if not wavesMode and isColossalRaid and KiraLH.ColossalOn() then
+			if not wavesMode and isColossalRaid and KiraEngine.ColossalOn() then
 				local stallObjective = rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Stall_Colossal_Titan")
 				local stallDone = stallObjective and stallObjective.Value >= (stallObjective:GetAttribute("Requirement") or 1)
 				if not stallDone then
@@ -2211,7 +2202,7 @@ function AutoFarm:Start()
 							end
 							-- Kira cannon multi-hit: re-fire the server Impact
 							-- event several times per shot so one cannonball lands many hits.
-							local hitsPerShot = math.clamp(tonumber(GetOption("CannonHitsSlider", 10)) or 10, 1, 30)
+							local hitsPerShot = 1
 							local function fireCannonHits(ref, count)
 								if not ref then return 0 end
 								local fired = 0
@@ -2387,34 +2378,6 @@ function AutoFarm:Start()
 				getgenv().KiraHub.State.HoldTitanZeroSince = nil
 			end
 
-			-- Kira "Wait for Boss": do not burn the boss window on adds while
-			-- the raid boss is still spawning / anchored / missing its hitbox.
-			if IsToggled("WaitForBossToggle") and not wavesMode and titansFolder then
-				local bossModel = nil
-				for _, m in ipairs(titansFolder:GetChildren()) do
-					if m:IsA("Model") and getgenv().KiraHub.Data.BossNames[m.Name] and KiraTitanAlive(m) then
-						bossModel = m
-						break
-					end
-				end
-				if bossModel then
-					local state = getgenv().KiraHub.State
-					if state.BossWatch ~= bossModel then
-						state.BossWatch = bossModel
-						state.BossSeenAt = os.clock()
-					end
-					local hum = bossModel:FindFirstChildOfClass("Humanoid")
-					local primary = bossModel.PrimaryPart or bossModel:FindFirstChild("HumanoidRootPart")
-					local settle = GetOption("BossSettleSlider", 5)
-					local notReady = (not primary) or primary.Anchored
-						or (hum and hum.MaxHealth <= 0) or (not KiraNape(bossModel))
-					if notReady or (os.clock() - (state.BossSeenAt or 0)) < settle then
-						if root then root.AssemblyLinearVelocity = Vector3.zero end
-						task.wait(0.1)
-						continue
-					end
-				end
-			end
 
 			local rootPos = root.Position
 			local referencePos = rootPos
@@ -2520,7 +2483,7 @@ function AutoFarm:Start()
 					targetPart = closestNape or bossHitPoint
 					targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
 				else
-					local prio = GetOption("RaidPriorityDropdown", "Boss First")
+					local prio = KiraEngine.PrioritizeBoss() and "Boss First" or "Adds First"
 					if prio == "Boss First" then
 						targetPart = bossHitPoint or closestNape
 						targetIsRoaring = (targetPart == bossHitPoint) and bossIsRoaring or false
@@ -2554,7 +2517,7 @@ function AutoFarm:Start()
 						or not KiraTitanAlive(KiraNapeModel(pick))
 						or not table.find(holdNapes, pick)
 					then
-						pick = holdNapes[math.random(1, #holdNapes)]
+						pick = closestNape or holdNapes[1]
 						state.MissionTarget = pick
 						state.MissionTargetAt = now
 					end
@@ -2567,9 +2530,9 @@ function AutoFarm:Start()
 				targetPart = closestNape
 				targetIsRoaring = false
 			end
-			-- [LnHub] Prioritize Boss: one switch covering missions, waves and
-			-- raids. The boss is only chosen while it is a live titan.
-			if KiraLH.PrioritizeBoss() and bossHitPoint and bossHitPoint.Parent
+			-- Prioritize Boss: one switch covering missions, waves and raids.
+			-- The boss is only chosen while it is a live titan.
+			if KiraEngine.PrioritizeBoss() and bossHitPoint and bossHitPoint.Parent
 				and KiraTitanAlive(KiraNapeModel(bossHitPoint))
 			then
 				targetPart = bossHitPoint
@@ -2651,11 +2614,11 @@ function AutoFarm:Start()
 					targetHeightPos = targetPart.Position + Vector3.new(0, floatHeight, 0)
 				end
 
-				local moveMode = GetOption("MovementModeDropdown", "Hover")
+				local moveMode = GetOption("MovementModeDropdown", "Better Teleport")
 				local moveSpeed = math.max(tonumber(GetOption("HoverSpeedSlider", 400)) or 400, 100)
 				local moveKey = targetPart
-				if moveMode == "LnHub" then
-					-- [LnHub] per-frame CFrame movement is driven by KiraLH.MoveStep.
+				if moveMode == "Better Teleport" then
+					-- Per-frame CFrame movement is driven by KiraEngine.MoveStep.
 					KiraCancelFarmMove()
 				elseif isBlades and moveMode ~= "Teleport" then
 					-- Blades: hold 400+ studs/s of momentum (more velocity =
@@ -2683,7 +2646,7 @@ function AutoFarm:Start()
 
 				local dx = root.Position.X - targetPart.Position.X
 				local dz = root.Position.Z - targetPart.Position.Z
-				local attackRange = KiraLH.Reach()
+				local attackRange = KiraEngine.Reach()
 				local AttackRangeSq = attackRange * attackRange
 				local bladesReady = (KiraBladesEmpty() ~= true)
 					and now >= (getgenv().KiraHub.State.BladeSettleUntil or 0)
@@ -2718,7 +2681,7 @@ function AutoFarm:Start()
 								-- explosion count comes from acquireTokens() -- a
 								-- 150 events/s budget capped at 10 per target.
 								multiTargets = {}
-								local maxTargets = KiraLH.MultiHitMax()
+								local maxTargets = KiraEngine.MultiHitMax()
 								for _, n in ipairs(holdNapes) do
 									if n and n.Parent then
 										multiTargets[#multiTargets + 1] = {part = n, pos = n.Position}
@@ -2729,11 +2692,12 @@ function AutoFarm:Start()
 									multiTargets[1] = {part = targetPart, pos = targetPart.Position}
 								end
 								reps = math.max(1, math.min(10, math.floor(150 / math.max(#multiTargets, 1))))
-								-- [LnHub] BossMult: a boss takes that many explosions.
-								if isBoss and KiraLH then reps = math.max(1, KiraLH.BossMult()) end
+								-- Bosses take the same number of explosions as the
+								-- Multi Hit Targets slider (one slider for both).
+								if isBoss and KiraEngine then reps = math.max(1, KiraEngine.BossMult()) end
 							else
 								if isBoss then
-									reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+									reps = math.clamp(math.floor(KiraEngine.BossMult()), 1, 60)
 								end
 								multiTargets = {{part = targetPart, pos = targetPart.Position}}
 							end
@@ -2885,10 +2849,10 @@ task.spawn(function()
 		state.RefillsLeft = KiraRefillsLeft()
 		state.Weapon = KiraWeaponInfo() or state.Weapon
 
-		-- [LnHub] exact LnHub refill flow replaces Kira's own refill while
-		-- the engine toggle is on (hold at station, Reload, verify result).
-		if KiraLH and KiraLH.EngineOn() then
-			pcall(KiraLH.RefillTick)
+		-- Station refill (hold at station, Reload, verify the result)
+		-- replaces Kira's own refill path.
+		if KiraEngine and KiraEngine.EngineOn() then
+			pcall(KiraEngine.RefillTick)
 			continue
 		end
 		-- Explicit request from the attack block (spears ran dry mid-fight).
@@ -3059,7 +3023,7 @@ task.spawn(function()
 					if multi then
 						reps = math.max(1, math.min(10, math.floor(150 / math.max(#targets, 1))))
 					elseif isBoss then
-						reps = math.clamp(math.floor(tonumber(GetOption("BladeBossHitsSlider", 10)) or 10), 1, 60)
+						reps = math.clamp(math.floor(KiraEngine.BossMult()), 1, 60)
 					end
 					task.spawn(function()
 						local beforeAmmo = KiraSpearsLeft()
@@ -3529,12 +3493,12 @@ function BuildPlayerTab(TabRef)
 end
 
 -- ============================================================================
---  [KIRA] LNHUB ENGINE  (ported from LN HUB V1.21)
---  Movement / refill / safe mode / QTE / rejoin / titan / claims / waves /
---  family / artifact. Everything is gated by its own toggle and by the
---  master "LnHub Engine" toggle, so Kira's proven combat path stays intact.
+--  [KIRA] FARM ENGINE
+--  Movement / refill / safe mode / QTE / rejoin / titan / waves / family /
+--  artifact. Everything is gated by its own toggle, so Kira's proven combat
+--  path stays intact.
 -- ============================================================================
-KiraLH = (function(Ctx)
+KiraEngine = (function(Ctx)
 	local Players = Ctx.Players
 	local RunService = Ctx.RunService
 	local UserInputService = Ctx.UserInputService
@@ -3636,17 +3600,17 @@ KiraLH = (function(Ctx)
 		return v
 	end
 
-	function M.EngineOn() return M.Toggle("LnEngineToggle", true) end
+	function M.EngineOn() return true end
 	function M.Safe() return M.Toggle("SafeModeToggle", false) end
 	function M.PrioritizeBoss() return M.Toggle("PrioritizeBossToggle", true) end
 	function M.MultiHit() return M.Toggle("MultiHitToggle", false) end
 	function M.MultiHitMax() return math.floor(M.Num("MultiHitMaxSlider", 5, 2, 16)) end
-	function M.BossMult() return math.floor(M.Num("LnBossMultSlider", 3, 1, 10)) end
-	function M.ColossalOn() return M.Toggle("LnColossalToggle", true) end
+	function M.BossMult() return M.MultiHitMax() end
+	function M.ColossalOn() return M.Toggle("ColossalToggle", true) end
 
 	local function note(text)
 		pcall(function()
-			Library:Notify({Title = "LnHub", Description = tostring(text), Time = 4})
+			Library:Notify({Title = "Kira Hub", Description = tostring(text), Time = 4})
 		end)
 	end
 	M.Note = note
@@ -3717,7 +3681,7 @@ KiraLH = (function(Ctx)
 	end
 
 	-- ------------------------------------------------------------------
-	--  Movement (exact LnHub per-frame CFrame.lookAt movement)
+	--  Movement (per-frame CFrame.lookAt movement)
 	-- ------------------------------------------------------------------
 	function M.Speed()
 		local v = tonumber(M.Option("HoverSpeedSlider", 400)) or 400
@@ -3730,11 +3694,23 @@ KiraLH = (function(Ctx)
 		return tonumber(M.Option("FloatHeightSlider", 250)) or 250
 	end
 
+	local spearBase, spearAt = nil, 0
 	function M.SpearDist()
-		local n = tonumber(player:GetAttribute("LnSpear")) or 0
-		local base = 220
-		if n > 0 then base = 0.95 * n + 16 end
-		return base + (S.SpearExtra or 0)
+		-- Spear hover distance follows the Blast Radius level, the same way the
+		-- original farm computed it (0.95 * level + 16, 220 when unread).
+		local now = os.clock()
+		if spearBase == nil or now - spearAt > 15 then
+			spearAt = now
+			local d = M.Stats()
+			local sp = type(d) == "table" and type(d.Upgrades) == "table" and d.Upgrades.Spears
+			local n = type(sp) == "table" and tonumber(sp.Blast_Radius) or 0
+			if n and n > 0 then
+				spearBase = 0.95 * n + 16
+			else
+				spearBase = 220
+			end
+		end
+		return (spearBase or 220) + (S.SpearExtra or 0)
 	end
 
 	function M.Reach()
@@ -3745,7 +3721,7 @@ KiraLH = (function(Ctx)
 	end
 
 	function M.MoveMode()
-		return tostring(M.Option("MovementModeDropdown", "LnHub"))
+		return tostring(M.Option("MovementModeDropdown", "Better Teleport"))
 	end
 
 	local collided = {}
@@ -3773,7 +3749,7 @@ KiraLH = (function(Ctx)
 	end
 
 	function M.MoveStep(dt)
-		if M.MoveMode() ~= "LnHub" then return end
+		if M.MoveMode() ~= "Better Teleport" then return end
 		if not (AutoFarm and (AutoFarm._running or IsToggled("ManualAutoAttackToggle"))) then return end
 		if S.Paused or S.Refilling then return end
 		local _, root = M.Char()
@@ -3834,7 +3810,7 @@ KiraLH = (function(Ctx)
 	end
 
 	-- ------------------------------------------------------------------
-	--  Refill (exact LnHub flow: hold at station, reload, verify)
+	--  Refill (hold at station, reload, verify the result)
 	-- ------------------------------------------------------------------
 	local function refillWorked(before, kind)
 		local refills = KiraRefillsLeft()
@@ -3982,7 +3958,7 @@ KiraLH = (function(Ctx)
 	local SKILL_KEYS = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five}
 
 	function M.SkillsTick()
-		if not M.Toggle("LnTitanSkillsToggle", false) then return end
+		if not M.Toggle("TitanSkillsToggle", false) then return end
 		if not M.EngineOn() then return end
 		if UserInputService:GetFocusedTextBox() then return end
 		local char, root = M.Char()
@@ -3992,7 +3968,7 @@ KiraLH = (function(Ctx)
 		local nape = getgenv().KiraHub.State.TargetNape
 		if titan and not (nape and nape.Parent) then return end
 		for i = 1, 5 do
-			-- LnHub: a titan skill is ready while Shifter_Skill_<slot> is nil.
+			-- A titan skill is ready while Shifter_Skill_<slot> is nil.
 			if (S.SkillRetry[i] or 0) <= os.clock()
 				and (not titan or player:GetAttribute("Shifter_Skill_" .. i) == nil)
 			then
@@ -4003,7 +3979,7 @@ KiraLH = (function(Ctx)
 				end)
 				if titan then
 					task.wait(0.6)
-					-- Still nil means the server ignored it: back off like LnHub.
+					-- Still nil means the server ignored it: back off for a while.
 					local used = player:GetAttribute("Shifter_Skill_" .. i) ~= nil
 					S.SkillRetry[i] = os.clock() + (used and 0.4 or 8)
 				else
@@ -4018,7 +3994,7 @@ KiraLH = (function(Ctx)
 	--  QTE (Female raid) / rejoin
 	-- ------------------------------------------------------------------
 	function M.QTEWatch()
-		if not M.Toggle("LnQTEToggle", false) then return end
+		if not M.Toggle("QTEToggle", false) then return end
 		if os.clock() - (S.QAt or 0) < 0.12 then return end
 		local gui = pGui:FindFirstChild("Interface")
 		local qte = gui and gui:FindFirstChild("QTE")
@@ -4030,7 +4006,7 @@ KiraLH = (function(Ctx)
 		end
 		local scale = 0
 		pcall(function() scale = timing.Size.X.Scale end)
-		-- LnHub re-arms the press whenever the ring grows again.
+		-- Re-arm the press whenever the ring grows again.
 		if S.QLast == nil or S.QLast + 0.3 < scale then S.QDone = false end
 		S.QLast = scale
 		local bg = qte:FindFirstChild("BG")
@@ -4076,17 +4052,17 @@ KiraLH = (function(Ctx)
 		end
 	end
 
-	-- LnHub rejoin: a kick / disconnect teleports back to the lobby place,
+	-- Rejoin: a kick / disconnect teleports back to the lobby place,
 	-- while the in-lobby "rejoin the last match" prompt is answered with Yes.
 	function M.RejoinTeleport(reason)
-		if not M.Toggle("LnAutoRejoinToggle", false) then return end
+		if not M.Toggle("RejoinOnKickToggle", false) then return end
 		if S.Rejoining then return end
 		S.Rejoining = true
 		note("Rejoin: " .. tostring(reason))
 		task.spawn(function()
 			task.wait(3)
 			for _ = 1, 20 do
-				if not M.Toggle("LnAutoRejoinToggle", false) then break end
+				if not M.Toggle("RejoinOnKickToggle", false) then break end
 				pcall(function() TeleportService:Teleport(Ctx.LobbyId, player) end)
 				task.wait(15)
 			end
@@ -4118,7 +4094,7 @@ KiraLH = (function(Ctx)
 	end
 
 	function M.RejoinWatch()
-		if not M.Toggle("LnAutoRejoinToggle", false) then return end
+		if not M.Toggle("RejoinOnKickToggle", false) then return end
 		if not isLobby then return end
 		if S.RejoinPromptUntil and os.clock() < S.RejoinPromptUntil then return end
 		if os.clock() - (S.RejoinScanAt or 0) < 0.5 then return end
@@ -4149,19 +4125,6 @@ KiraLH = (function(Ctx)
 			end
 			task.wait(20)
 		end)
-	end
-
-	-- ------------------------------------------------------------------
-	--  Claims (all auto claims)
-	-- ------------------------------------------------------------------
-	function M.ClaimAll()
-		if not M.Toggle("LnAutoClaimToggle", false) then return end
-		if not isLobby then return end
-		pcall(KiraClaimQuests)
-		pcall(KiraClaimAchievements)
-		pcall(KiraClaimDailyDirect)
-		pcall(KiraClaimUpdateStatus)
-		pcall(function() getRemote:InvokeServer("Functions", "Login") end)
 	end
 
 	-- ------------------------------------------------------------------
@@ -4239,19 +4202,24 @@ KiraLH = (function(Ctx)
 	function M.WavesBase()
 		local names = (getgenv().KiraHub.Data and getgenv().KiraHub.Data.BaseUpgradeNames) or {}
 		if #names == 0 then return end
+		-- The Select Upgrades list still decides what may be bought. An empty
+		-- list means "everything", so the toggle keeps working out of the box.
+		local picked = M.Option("BaseUpgradesSelectDropdown", {})
+		local allow = type(picked) == "table" and picked or {}
+		local any = next(allow) ~= nil
 		local st = getgenv().KiraHub.State
-		st.LnBaseIdx = st.LnBaseIdx or 1
-		st.LnBaseRetry = st.LnBaseRetry or {}
+		st.BaseIdx = st.BaseIdx or 1
+		st.BaseRetry = st.BaseRetry or {}
 		local now = os.clock()
 		for offset = 0, #names - 1 do
-			local idx = ((st.LnBaseIdx + offset - 1) % #names) + 1
+			local idx = ((st.BaseIdx + offset - 1) % #names) + 1
 			local name = names[idx]
-			if now >= (st.LnBaseRetry[name] or 0) then
-				st.LnBaseIdx = (idx % #names) + 1
+			if (not any or allow[name] == true) and now >= (st.BaseRetry[name] or 0) then
+				st.BaseIdx = (idx % #names) + 1
 				local ok = pcall(function()
 					return getRemote:InvokeServer("Waves", "Upgrade", {name})
 				end)
-				st.LnBaseRetry[name] = os.clock() + (ok and 2.5 or 6)
+				st.BaseRetry[name] = os.clock() + (ok and 2.5 or 6)
 				return
 			end
 		end
@@ -4259,11 +4227,10 @@ KiraLH = (function(Ctx)
 
 	function M.WavesTick()
 		if not IsWavesMode() then return end
-		if not M.EngineOn() then return end
-		local reserve = M.Num("LnGoldReserveSlider", 5000, 0, 100000000)
-		if M.Toggle("LnWavesGearToggle", false) then pcall(M.WavesGear, reserve) end
-		if M.Toggle("LnWavesBlessingToggle", false) then pcall(M.WavesBlessing, reserve) end
-		if M.Toggle("LnBaseUpgradeAllToggle", false) then pcall(M.WavesBase) end
+		local reserve = M.Num("GoldReserveSlider", 5000, 0, 100000000)
+		if M.Toggle("AutoWavesUpgradeToggle", false) then pcall(M.WavesGear, reserve) end
+		if M.Toggle("AutoRollBlessingToggle", false) then pcall(M.WavesBlessing, reserve) end
+		if M.Toggle("AutoBuyBaseUpgradesToggle", false) then pcall(M.WavesBase) end
 	end
 
 	-- ------------------------------------------------------------------
@@ -4276,7 +4243,7 @@ KiraLH = (function(Ctx)
 	end
 
 	-- Rarity rank of a tier name (the values used by FamilyTiersToStop and
-	-- LnFamilyStoreMinDropdown), which are not family names.
+	-- FamilyStoreMinDropdown), which are not family names.
 	function M.TierRank(rarity)
 		return table.find(M.RANKS, tostring(rarity)) or 0
 	end
@@ -4324,15 +4291,15 @@ KiraLH = (function(Ctx)
 				local spins = data.Spins or sl.Spins or {}
 				local stopTiers = M.Option("FamilyTiersToStop", {}) or {}
 				local stopNames = M.Option("FamiliesToStop", {}) or {}
-				local storeOn = M.Toggle("LnFamilyStoreToggle", false)
-				local storeMin = M.TierRank(M.Option("LnFamilyStoreMinDropdown", "Legendary"))
-				local currencyOpt = tostring(M.Option("LnFamilyCurrencyDropdown", "Normal"))
+				local storeOn = M.Toggle("FamilyStoreToggle", false)
+				local storeMin = M.TierRank(M.Option("FamilyStoreMinDropdown", "Legendary"))
+				local currencyOpt = tostring(M.Option("FamilyCurrencyDropdown", "Normal"))
 				local currencies = {"Normal"}
 				if currencyOpt == "Lucky" then currencies = {"Lucky"}
 				elseif currencyOpt == "Normal + Lucky" then currencies = {"Normal", "Lucky"} end
 				local bagCap = 1 + (tonumber(sl.Extra_Slots and sl.Extra_Slots.Family) or 0)
 				if M.HasFamilyBag() then bagCap = bagCap + 10 end
-				local equipBest = M.Toggle("LnFamilyEquipBestToggle", false)
+				local equipBest = M.Toggle("FamilyEquipBestToggle", false)
 
 				local function satisfied(fam)
 					if not fam then return false end
@@ -4434,8 +4401,8 @@ KiraLH = (function(Ctx)
 		if not M.EngineOn() then return end
 		if not isLobby then return end
 		if S.ArtBusy then return end
-		if not M.Toggle("LnArtifactRollToggle", false) then return end
-		local name = tostring(M.Option("LnArtifactNameInput", "") or "")
+		if not M.Toggle("ArtifactRollToggle", false) then return end
+		local name = tostring(M.Option("ArtifactNameInput", "") or "")
 		if name == "" then return end
 		S.ArtBusy = true
 		task.spawn(function()
@@ -4464,8 +4431,8 @@ KiraLH = (function(Ctx)
 				for i, r in pairs(values.Rollable or {}) do idx[r.Stat] = tonumber(i) end
 				local targets = {}
 				for n = 1, 2 do
-					local stat = tostring(M.Option("LnArtStat" .. n .. "Dropdown", "None")):gsub(" ", "_")
-					local raw = M.Option("LnArtVal" .. n .. "Input", "")
+					local stat = tostring(M.Option("ArtStat" .. n .. "Dropdown", "None")):gsub(" ", "_")
+					local raw = M.Option("ArtVal" .. n .. "Input", "")
 					local lo, hi = parseRange(raw)
 					local i = idx[stat]
 					if i and lo then
@@ -4480,7 +4447,7 @@ KiraLH = (function(Ctx)
 					return
 				end
 
-				-- Lock bookkeeping (LnHub rules): the locks this script sets are
+				-- Lock bookkeeping: the locks this script sets are
 				-- remembered by stat signature, so locks the player set in-game
 				-- are never touched. The game's reroll with a lock can delete the
 				-- unlocked second stat, so locking is only done when the other
@@ -4572,7 +4539,7 @@ KiraLH = (function(Ctx)
 					return
 				end
 
-				local reserve = M.Num("LnArtifactReserveSlider", 5000, 0, 100000000)
+				local reserve = M.Num("ArtifactReserveSlider", 5000, 0, 100000000)
 				local same, done = 0, false
 				for _ = 1, 300 do
 					local s = slotNow()
@@ -4701,7 +4668,6 @@ KiraLH = (function(Ctx)
 			while getgenv().KiraHubAOTR do
 				task.wait(3)
 				if isLobby then
-					pcall(M.ClaimAll)
 					pcall(M.FamilyTick)
 					pcall(M.ArtifactRoll)
 				end
@@ -4728,8 +4694,8 @@ end)({
 	AutoFarm = AutoFarm,
 	LobbyId = LOBBY_ID,
 })
-getgenv().KiraLH = KiraLH
-KiraLH.Start()
+getgenv().KiraEngine = KiraEngine
+KiraEngine.Start()
 
 function BuildFarmTab(TabRef)
 	local F_Lobby = TabRef:AddLeftGroupbox("Lobby Controls", "component")
@@ -4793,6 +4759,12 @@ function BuildFarmTab(TabRef)
 			Library:Notify({Title = "Discord", Description = "Invite link copied to clipboard!", Time = 3})
 		end
 	})
+	F_Lobby:AddToggle("SafeModeToggle", {
+		Text = "Safe Mode",
+		Default = false,
+		Tooltip = "Lower hover (105), capped speed (220) and a shorter reach (135 / 150 as titan)."
+	})
+	Toggles.SafeModeToggle:OnChanged(function() MarkDirty() end)
 
 	local F_Auto = TabRef:AddLeftGroupbox("Automation", "cpu")
 	getgenv().KiraHub.UI.Labels.Status = F_Auto:AddLabel("Status: Idle")
@@ -4811,18 +4783,12 @@ function BuildFarmTab(TabRef)
 	end
 
 	F_Auto:AddToggle("AutoKillToggle", {
-		Text = "Auto Farm Missions",
+		Text = "Auto Farm",
 		Default = false,
-		Tooltip = "Farms missions and waves. Titans are attacked in random order."
+		Tooltip = "Farms missions, raids and waves. Titans are attacked nearest first."
 	})
 	Toggles.AutoKillToggle:OnChanged(KiraSyncFarmRun)
 
-	F_Auto:AddToggle("AutoFarmRaidsToggle", {
-		Text = "Auto Farm Raids",
-		Default = false,
-		Tooltip = "Farms raids with objective priority (Eren / boats / Female)."
-	})
-	Toggles.AutoFarmRaidsToggle:OnChanged(KiraSyncFarmRun)
 
 	F_Auto:AddToggle("ManualAutoAttackToggle", {
 		Text = "Manual Auto Attack",
@@ -4882,7 +4848,7 @@ function BuildFarmTab(TabRef)
 
 	F_Move:AddDropdown("MovementModeDropdown", {
 		Text = "Movement Mode",
-		Values = {"LnHub", "Hover", "Teleport", "Tween Farm"},
+		Values = {"Better Teleport", "Hover", "Tween Farm"},
 		Default = 1,
 		Multi = false
 	})
@@ -5111,6 +5077,15 @@ function BuildUtilityTab(TabRef)
 		Tooltip = "ON = SH farm: blades hit every nape per swing and spears explode every nape. Higher ban risk. OFF = normal safe farm."
 	})
 	Toggles.MultiHitToggle:OnChanged(function() MarkDirty() end)
+	U_Combat:AddSlider("MultiHitMaxSlider", {
+		Text = "Multi Hit Targets",
+		Default = 5,
+		Min = 2,
+		Max = 16,
+		Rounding = 0,
+		Tooltip = "How many napes one swing or spear hits, and how many extra hits a boss takes (2-16)."
+	})
+	Options.MultiHitMaxSlider:OnChanged(function() MarkDirty() end)
 
 	U_Combat:AddSlider("AttackRangeSlider", {
 		Text = "Attack Range",
@@ -5121,110 +5096,7 @@ function BuildUtilityTab(TabRef)
 	})
 	Options.AttackRangeSlider:OnChanged(function() MarkDirty() end)
 
-	U_Combat:AddSlider("BladeBossHitsSlider", {
-		Text = "Blade Boss Hits",
-		Default = 10,
-		Min = 1,
-		Max = 15,
-		Rounding = 0,
-		Tooltip = "Hit loops per attack cycle on bosses"
-	})
-	Options.BladeBossHitsSlider:OnChanged(function() MarkDirty() end)
-	-- [LnHub] engine switches (ported from LN HUB V1.21)
-	local U_Ln = TabRef:AddRightGroupbox("LnHub Engine", "zap")
 
-	U_Ln:AddToggle("LnEngineToggle", {
-		Text = "LnHub Engine",
-		Default = true,
-		Tooltip = "Master switch for the LnHub refill, movement, safe mode and lobby loops."
-	})
-	Toggles.LnEngineToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("PrioritizeBossToggle", {
-		Text = "Prioritize Boss",
-		Default = true,
-		Tooltip = "One switch for every mode (missions, waves, raids): always fight the boss while it is vulnerable."
-	})
-	Toggles.PrioritizeBossToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("SafeModeToggle", {
-		Text = "Safe Mode",
-		Default = false,
-		Tooltip = "LnHub Secure Mode: lower hover (105), capped speed (220) and a shorter reach (135 / 150 as titan)."
-	})
-	Toggles.SafeModeToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddSlider("MultiHitMaxSlider", {
-		Text = "Multi Hit Targets",
-		Default = 5,
-		Min = 2,
-		Max = 16,
-		Rounding = 0,
-		Tooltip = "How many napes one swing or spear hits while Multi Hit is on (LnHub: 2-16)."
-	})
-	Options.MultiHitMaxSlider:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddSlider("LnBossMultSlider", {
-		Text = "Boss Hit Multiplier",
-		Default = 3,
-		Min = 1,
-		Max = 10,
-		Rounding = 0,
-		Tooltip = "Extra hit/explosion repeats on bosses (LnHub BossMult)."
-	})
-	Options.LnBossMultSlider:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("AutoTurnTitanToggle", {
-		Text = "Auto Turn Titan",
-		Default = false,
-		Tooltip = "Shifts into titan form when the bar is at least 75 and a shift charge is available."
-	})
-	Toggles.AutoTurnTitanToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("LnTitanSkillsToggle", {
-		Text = "Auto Titan Skills",
-		Default = false,
-		Tooltip = "Fires titan skills on cooldown (LnHub skill loop). Works in normal and titan form."
-	})
-	Toggles.LnTitanSkillsToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("LnQTEToggle", {
-		Text = "Auto Female Raid QTE",
-		Default = false,
-		Tooltip = "Wins the female titan raid QTE automatically."
-	})
-	Toggles.LnQTEToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("LnColossalToggle", {
-		Text = "Auto Colossal Cannon",
-		Default = true,
-		Tooltip = "LnHub colossal raid cannon sequence."
-	})
-	Toggles.LnColossalToggle:OnChanged(function() MarkDirty() end)
-
-	U_Ln:AddToggle("LnAutoRejoinToggle", {
-		Text = "Auto Rejoin / Kick",
-		Default = false,
-		Tooltip = "Teleports back to the lobby after a kick or disconnect and answers the rejoin prompt with Yes."
-	})
-	Toggles.LnAutoRejoinToggle:OnChanged(function() MarkDirty() end)
-
-	-- [KIRA] Kira-style combat / refill controls
-	U_Combat:AddDropdown("RefillModeDropdown", {
-		Text = "Refill Mode",
-		Values = {"Smart", "Remote Only", "Station Only"},
-		Default = "Smart",
-		Multi = false,
-		Tooltip = "Smart tries long-range first, then flies to a refill station if the server refuses."
-	})
-	Options.RefillModeDropdown:OnChanged(function() MarkDirty() end)
-
-	U_Combat:AddToggle("RefillFarToggle", {Text = "Long-Range Refill", Default = true})
-	Toggles.RefillFarToggle:OnChanged(function()
-		local rc = getgenv().KiraHub.Refill
-		if rc then rc.LongRangeBlockedUntil = 0 rc.LongRangeFails = 0 end
-		MarkDirty()
-	end)
 
 	getgenv().KiraHub.UI.Labels.Refill = U_Combat:AddLabel("Refill: Idle")
 
@@ -5264,6 +5136,12 @@ function BuildUtilityTab(TabRef)
 		ManageCrashDetection(Toggles.AutoRejoinToggle.Value)
 		MarkDirty()
 	end)
+	U_Sec:AddToggle("RejoinOnKickToggle", {
+		Text = "Auto rejoin on kick",
+		Default = false,
+		Tooltip = "Teleports back to the lobby after a kick or disconnect and answers the rejoin prompt with Yes."
+	})
+	Toggles.RejoinOnKickToggle:OnChanged(function() MarkDirty() end)
 
 	U_Sec:AddButton({
 		Text = "Unload Script",
@@ -5289,6 +5167,19 @@ function BuildUtilityTab(TabRef)
 		Text = "Mastery Mode"
 	})
 	Options.MasteryModeDropdown:OnChanged(function() MarkDirty() end)
+	U_Mastery:AddToggle("AutoTurnTitanToggle", {
+		Text = "Auto Turn Titan",
+		Default = false,
+		Tooltip = "Shifts into titan form when the bar is at least 75 and a shift charge is available."
+	})
+	Toggles.AutoTurnTitanToggle:OnChanged(function() MarkDirty() end)
+
+	U_Mastery:AddToggle("TitanSkillsToggle", {
+		Text = "Auto Titan Skills",
+		Default = false,
+		Tooltip = "Fires titan skills on cooldown. Works in normal and titan form."
+	})
+	Toggles.TitanSkillsToggle:OnChanged(function() MarkDirty() end)
 
 	local U_Skills = TabRef:AddRightGroupbox("Auto Skills", "zap")
 	for skillIndex = 1, 5 do
@@ -5630,7 +5521,7 @@ function BuildUpgradesTab(TabRef)
 	-- ============================================================
 	-- Auto Claim (ported from Kira)
 	-- ============================================================
-	local M_Claim = TabRef:AddRightGroupbox("Auto Claim (Lobby)", "check-circle")
+	local M_Claim = TabRef:AddRightGroupbox("Auto Claim & Artifacts", "check-circle")
 	getgenv().KiraHub.UI.Labels.AutoClaimStatus = M_Claim:AddLabel("Claim status: Idle")
 
 	local claimToggles = {
@@ -5646,6 +5537,71 @@ function BuildUpgradesTab(TabRef)
 		M_Claim:AddToggle(def[1], {Text = def[2], Default = false, Tooltip = def[3]})
 		Toggles[def[1]]:OnChanged(function() MarkDirty() end)
 	end
+	M_Claim:AddDivider()
+
+	M_Claim:AddToggle("ArtifactRollToggle", {
+		Text = "Auto Artifact Reroll",
+		Default = false,
+		Tooltip = "Rerolls one artifact until the chosen stat targets are met, then equips it."
+	})
+	Toggles.ArtifactRollToggle:OnChanged(function() MarkDirty() end)
+
+	M_Claim:AddSlider("ArtifactReserveSlider", {
+		Text = "Artifact Gold Reserve",
+		Default = 5000,
+		Min = 0,
+		Max = 100000000,
+		Rounding = 0,
+		Tooltip = "Stop rerolling when gold would drop below this."
+	})
+	Options.ArtifactReserveSlider:OnChanged(function() MarkDirty() end)
+
+	M_Claim:AddInput("ArtifactNameInput", {
+		Text = "Artifact Name",
+		Default = "Scarf",
+		Placeholder = "Scarf",
+		Tooltip = "Exact artifact name you own (e.g. Scarf)."
+	})
+	Options.ArtifactNameInput:OnChanged(function() MarkDirty() end)
+
+	local ART_STATS = {
+		"None", "ODM Damage", "Crit Damage", "Crit Chance", "Blade Durability",
+		"Damage Reduction", "Health", "Health Regen", "Injury Chance", "ODM Control",
+		"ODM Gas", "ODM Range", "ODM Speed", "Skill Cooldown Reduction",
+		"Swing Speed", "Shifter Damage"
+	}
+
+	M_Claim:AddDropdown("ArtStat1Dropdown", {
+		Text = "Artifact Stat 1",
+		Values = ART_STATS,
+		Default = "ODM Damage",
+		Multi = false
+	})
+	Options.ArtStat1Dropdown:OnChanged(function() MarkDirty() end)
+
+	M_Claim:AddInput("ArtVal1Input", {
+		Text = "Stat 1 Value (%)",
+		Default = "",
+		Placeholder = "10 or 10-12",
+		Tooltip = "10 = 10% or more; 10-12 = between 10% and 12%."
+	})
+	Options.ArtVal1Input:OnChanged(function() MarkDirty() end)
+
+	M_Claim:AddDropdown("ArtStat2Dropdown", {
+		Text = "Artifact Stat 2",
+		Values = ART_STATS,
+		Default = "None",
+		Multi = false
+	})
+	Options.ArtStat2Dropdown:OnChanged(function() MarkDirty() end)
+
+	M_Claim:AddInput("ArtVal2Input", {
+		Text = "Stat 2 Value (%)",
+		Default = "",
+		Placeholder = "10 or 10-12",
+		Tooltip = "10 = 10% or more; 10-12 = between 10% and 12%."
+	})
+	Options.ArtVal2Input:OnChanged(function() MarkDirty() end)
 end
 
 function BuildWavesTab(TabRef)
@@ -5762,39 +5718,15 @@ function BuildWavesTab(TabRef)
 		Tooltip = "Auto rolls blessings using wave tokens"
 	})
 	Toggles.AutoRollBlessingToggle:OnChanged(function() MarkDirty() end)
-	-- [LnHub] waves automation (cheapest-first gear, blessing, HQ upgrades)
-	local W_Ln = TabRef:AddRightGroupbox("LnHub Waves", "hammer")
-
-	W_Ln:AddToggle("LnWavesGearToggle", {
-		Text = "Auto Upgrade Wave Gear (LnHub)",
-		Default = false,
-		Tooltip = "Buys the cheapest wave gear stat first (15 levels each) with wave gold."
-	})
-	Toggles.LnWavesGearToggle:OnChanged(function() MarkDirty() end)
-
-	W_Ln:AddToggle("LnWavesBlessingToggle", {
-		Text = "Auto Roll Blessing (LnHub)",
-		Default = false,
-		Tooltip = "Rolls blessings whenever the gold reserve allows it."
-	})
-	Toggles.LnWavesBlessingToggle:OnChanged(function() MarkDirty() end)
-
-	W_Ln:AddToggle("LnBaseUpgradeAllToggle", {
-		Text = "Auto Upgrade Every HQ Base",
-		Default = false,
-		Tooltip = "Buys every HQ base upgrade that has a cost, ignoring the selection list."
-	})
-	Toggles.LnBaseUpgradeAllToggle:OnChanged(function() MarkDirty() end)
-
-	W_Ln:AddSlider("LnGoldReserveSlider", {
+	W_Up:AddSlider("GoldReserveSlider", {
 		Text = "Gold Reserve",
 		Default = 5000,
 		Min = 0,
 		Max = 100000000,
 		Rounding = 0,
-		Tooltip = "Never spend gold below this amount."
+		Tooltip = "Never spend wave gold below this amount."
 	})
-	Options.LnGoldReserveSlider:OnChanged(function() MarkDirty() end)
+	Options.GoldReserveSlider:OnChanged(function() MarkDirty() end)
 
 	W_Up:AddToggle("AutoShopWavesToggle", {
 		Text = "Auto Shop Wave Upgrades",
@@ -5835,7 +5767,7 @@ function BuildThunderSpearTab(TabRef)
 	TS_Crates:AddButton({
 		Text = "ONE-CLICK: Full Auto Thunder Spear",
 		Func = function()
-			if KiraLH then KiraLH.OneClickSpear() end
+			if KiraEngine then KiraEngine.OneClickSpear() end
 		end
 	})
 
@@ -5903,46 +5835,46 @@ function BuildThunderSpearTab(TabRef)
 end
 
 function BuildRaidsTab(TabRef)
-	local R_Engine = TabRef:AddLeftGroupbox("Raid Engine", "crosshair")
+	local R_Engine = TabRef:AddLeftGroupbox("Raid Farm", "crosshair")
 
-	R_Engine:AddToggle("RaidEngineToggle", {Text = "Smart Raid Engine", Default = true})
-	Toggles.RaidEngineToggle:OnChanged(function() MarkDirty() end)
-
-	R_Engine:AddDropdown("RaidPriorityDropdown", {
-		Text = "Mission Priority",
-		Values = {"Boss First", "Adds First", "Mixed"},
-		Default = 1,
-		Multi = false
+	R_Engine:AddToggle("AutoFarmRaidsToggle", {
+		Text = "Auto Farm Raids",
+		Default = false,
+		Tooltip = "Farms raids with objective priority (Eren / boats / Female)."
 	})
-	Options.RaidPriorityDropdown:OnChanged(function() MarkDirty() end)
-
-	R_Engine:AddToggle("WaitForBossToggle", {Text = "Wait for Boss", Default = false})
-	Toggles.WaitForBossToggle:OnChanged(function()
-		local st = getgenv().KiraHub.State
-		st.BossWatch = nil
-		st.BossSeenAt = nil
+	Toggles.AutoFarmRaidsToggle:OnChanged(function()
+		local missions = Toggles.AutoKillToggle and Toggles.AutoKillToggle.Value == true
+		local raids = Toggles.AutoFarmRaidsToggle and Toggles.AutoFarmRaidsToggle.Value == true
+		if missions or raids then
+			AutoFarm:Start()
+			pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Farming") end)
+		else
+			AutoFarm:Stop()
+			pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Idle") end)
+		end
 		MarkDirty()
 	end)
 
-	R_Engine:AddSlider("BossSettleSlider", {
-		Text = "Boss Settle Time (s)",
-		Default = 5,
-		Min = 0,
-		Max = 15,
-		Rounding = 0,
-		Tooltip = "How long to wait for a boss to spawn/anchor before ignoring adds."
+	R_Engine:AddToggle("PrioritizeBossToggle", {
+		Text = "Prioritize Boss",
+		Default = true,
+		Tooltip = "Always fight the boss while it is vulnerable (missions, waves and raids)."
 	})
-	Options.BossSettleSlider:OnChanged(function() MarkDirty() end)
+	Toggles.PrioritizeBossToggle:OnChanged(function() MarkDirty() end)
 
-	R_Engine:AddSlider("CannonHitsSlider", {
-		Text = "Cannon Hits per Shot",
-		Default = 10,
-		Min = 1,
-		Max = 30,
-		Rounding = 0,
-		Tooltip = "Colossal phase 1: how many impact hits each cannon shot lands."
+	R_Engine:AddToggle("QTEToggle", {
+		Text = "Auto Female Raid QTE",
+		Default = false,
+		Tooltip = "Wins the female titan raid QTE automatically."
 	})
-	Options.CannonHitsSlider:OnChanged(function() MarkDirty() end)
+	Toggles.QTEToggle:OnChanged(function() MarkDirty() end)
+
+	R_Engine:AddToggle("ColossalToggle", {
+		Text = "Auto Colossal Cannon",
+		Default = true,
+		Tooltip = "Runs the colossal raid cannon sequence automatically."
+	})
+	Toggles.ColossalToggle:OnChanged(function() MarkDirty() end)
 
 	local R_Hunter = TabRef:AddRightGroupbox("Boss Skin Hunter", "sparkles")
 	getgenv().KiraHub.UI.Labels.SkinHunter = R_Hunter:AddLabel("Status: Idle")
@@ -6050,6 +5982,35 @@ function BuildGlobalTab(TabRef)
 		Text = "Family Tiers To Stop"
 	})
 	Options.FamilyTiersToStop:OnChanged(function() MarkDirty() end)
+	G_Roll:AddToggle("FamilyEquipBestToggle", {
+		Text = "Auto Equip Best Family",
+		Default = false,
+		Tooltip = "Swaps to the best family in the bag whenever a roll is worse."
+	})
+	Toggles.FamilyEquipBestToggle:OnChanged(function() MarkDirty() end)
+
+	G_Roll:AddToggle("FamilyStoreToggle", {
+		Text = "Auto Store Family",
+		Default = false,
+		Tooltip = "Stores the equipped family when it is at or above the chosen rarity and the bag has room."
+	})
+	Toggles.FamilyStoreToggle:OnChanged(function() MarkDirty() end)
+
+	G_Roll:AddDropdown("FamilyStoreMinDropdown", {
+		Text = "Store From Rarity",
+		Values = {"Common", "Rare", "Epic", "Legendary", "Mythic", "Secret"},
+		Default = "Legendary",
+		Multi = false
+	})
+	Options.FamilyStoreMinDropdown:OnChanged(function() MarkDirty() end)
+
+	G_Roll:AddDropdown("FamilyCurrencyDropdown", {
+		Text = "Family Roll Currency",
+		Values = {"Normal", "Lucky", "Normal + Lucky"},
+		Default = "Normal",
+		Multi = false
+	})
+	Options.FamilyCurrencyDropdown:OnChanged(function() MarkDirty() end)
 
 	G_Roll:AddLabel("Stops when a selected family or tier appears", true)
 	G_Roll:AddLabel("Open Customisation > Family to roll", true)
@@ -6093,118 +6054,6 @@ function BuildGlobalTab(TabRef)
 		if Toggles.AutoEquipThunderToggle.Value then SetToggle("AutoEquipBladeToggle", false) end
 		MarkDirty()
 	end)
-	-- [LnHub] family + artifact automation (lobby)
-	local G_Ln = TabRef:AddRightGroupbox("LnHub Family & Artifact", "sparkles")
-
-	G_Ln:AddToggle("LnFamilyEquipBestToggle", {
-		Text = "Auto Equip Best Family",
-		Default = false,
-		Tooltip = "Swaps to the best family in the bag whenever a roll is worse."
-	})
-	Toggles.LnFamilyEquipBestToggle:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddToggle("LnFamilyStoreToggle", {
-		Text = "Auto Store Family",
-		Default = false,
-		Tooltip = "Stores the equipped family when it is at or above the chosen rarity and the bag has room."
-	})
-	Toggles.LnFamilyStoreToggle:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddDropdown("LnFamilyStoreMinDropdown", {
-		Text = "Store From Rarity",
-		Values = {"Common", "Rare", "Epic", "Legendary", "Mythic", "Secret"},
-		Default = "Legendary",
-		Multi = false
-	})
-	Options.LnFamilyStoreMinDropdown:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddDropdown("LnFamilyCurrencyDropdown", {
-		Text = "Family Roll Currency",
-		Values = {"Normal", "Lucky", "Normal + Lucky"},
-		Default = "Normal",
-		Multi = false
-	})
-	Options.LnFamilyCurrencyDropdown:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddDivider()
-
-	G_Ln:AddToggle("LnAutoClaimToggle", {
-		Text = "Auto Claim Everything (LnHub)",
-		Default = false,
-		Tooltip = "Claims quests, achievements, daily and login rewards in the lobby."
-	})
-	Toggles.LnAutoClaimToggle:OnChanged(function()
-		if Toggles.LnAutoClaimToggle.Value then
-			for _, name in ipairs({"AutoClaimMain", "AutoClaimSide", "AutoClaimWeekly", "AutoClaimDaily", "AutoClaimAchievements"}) do
-				SetToggle(name, true)
-			end
-		end
-		MarkDirty()
-	end)
-
-	G_Ln:AddToggle("LnArtifactRollToggle", {
-		Text = "Auto Artifact Reroll",
-		Default = false,
-		Tooltip = "Rerolls one artifact until the chosen stat targets are met, then equips it."
-	})
-	Toggles.LnArtifactRollToggle:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddSlider("LnArtifactReserveSlider", {
-		Text = "Artifact Gold Reserve",
-		Default = 5000,
-		Min = 0,
-		Max = 100000000,
-		Rounding = 0,
-		Tooltip = "Stop rerolling when gold would drop below this."
-	})
-	Options.LnArtifactReserveSlider:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddInput("LnArtifactNameInput", {
-		Text = "Artifact Name",
-		Default = "Scarf",
-		Placeholder = "Scarf",
-		Tooltip = "Exact artifact name you own (e.g. Scarf)."
-	})
-	Options.LnArtifactNameInput:OnChanged(function() MarkDirty() end)
-
-	local ART_STATS = {
-		"None", "ODM Damage", "Crit Damage", "Crit Chance", "Blade Durability",
-		"Damage Reduction", "Health", "Health Regen", "Injury Chance", "ODM Control",
-		"ODM Gas", "ODM Range", "ODM Speed", "Skill Cooldown Reduction",
-		"Swing Speed", "Shifter Damage"
-	}
-
-	G_Ln:AddDropdown("LnArtStat1Dropdown", {
-		Text = "Artifact Stat 1",
-		Values = ART_STATS,
-		Default = "ODM Damage",
-		Multi = false
-	})
-	Options.LnArtStat1Dropdown:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddInput("LnArtVal1Input", {
-		Text = "Stat 1 Value (%)",
-		Default = "",
-		Placeholder = "10 or 10-12",
-		Tooltip = "10 = 10% or more; 10-12 = between 10% and 12%."
-	})
-	Options.LnArtVal1Input:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddDropdown("LnArtStat2Dropdown", {
-		Text = "Artifact Stat 2",
-		Values = ART_STATS,
-		Default = "None",
-		Multi = false
-	})
-	Options.LnArtStat2Dropdown:OnChanged(function() MarkDirty() end)
-
-	G_Ln:AddInput("LnArtVal2Input", {
-		Text = "Stat 2 Value (%)",
-		Default = "",
-		Placeholder = "10 or 10-12",
-		Tooltip = "10 = 10% or more; 10-12 = between 10% and 12%."
-	})
-	Options.LnArtVal2Input:OnChanged(function() MarkDirty() end)
 end
 
 function BuildMarketTab(TabRef)
@@ -7228,9 +7077,9 @@ do
 			local character = player.Character
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			if not humanoid or humanoid.Health <= 0 then continue end
-			-- [LnHub] the LnHub skill switch owns skills while it is on, so
-			-- the two loops never press the same key twice in one cycle.
-			if KiraLH and KiraLH.Toggle("LnTitanSkillsToggle", false) then continue end
+			-- The engine skill switch owns skills while it is on, so the two
+			-- loops never press the same key twice in one cycle.
+			if KiraEngine and KiraEngine.Toggle("TitanSkillsToggle", false) then continue end
 			for index = 1, 5 do
 				if IsToggled("AutoSkill" .. index) and os.clock() >= nextSkillAt[index] then
 					local key = skillKeys[index]
@@ -8470,7 +8319,7 @@ function ExecuteFamilySpin()
 	local state = getgenv().KiraHub.State
 	if state.FamilySpinning then return end
 	if not IsToggled("AutoFamilySpin") then return end
-	if KiraLH and KiraLH.EngineOn() then return end
+	if KiraEngine and KiraEngine.EngineOn() then return end
 
 	state.FamilySpinning = true
 	task.spawn(function()
@@ -9520,6 +9369,7 @@ end
 
 function HandleWavesBaseUpgrades()
 	if not IsToggled("AutoBuyBaseUpgradesToggle") or not IsWavesMode() then return end
+	if KiraEngine and KiraEngine.EngineOn() then return end
 	local whitelist = GetOption("BaseUpgradesSelectDropdown", {})
 	local state = getgenv().KiraHub.State
 	state.BaseUpgradeRetryAt = state.BaseUpgradeRetryAt or {}
@@ -9550,6 +9400,7 @@ end
 
 function HandleWavesBlessing()
 	if not IsToggled("AutoRollBlessingToggle") then return end
+	if KiraEngine and KiraEngine.EngineOn() then return end
 	if not IsWavesMode() then return end
 	
 	pcall(function()
@@ -9575,7 +9426,7 @@ function HandleAutoStartWaves()
 end
 
 function HandleAutoWavesUpgrade()
-	if not IsToggled("AutoWavesUpgradeToggle") and not IsToggled("AutoShopWavesToggle") then return end
+	if not IsToggled("AutoShopWavesToggle") then return end
 	if not IsWavesMode() then return end
 	
 	local upgrades = {
@@ -9584,7 +9435,7 @@ function HandleAutoWavesUpgrade()
 	}
 	
 	for _, upg in ipairs(upgrades) do
-		if not IsToggled("AutoWavesUpgradeToggle") and not IsToggled("AutoShopWavesToggle") then break end
+		if not IsToggled("AutoShopWavesToggle") then break end
 		pcall(function()
 			getRemote:InvokeServer("Equipment", "Upgrade", {upg})
 		end)
@@ -9726,7 +9577,7 @@ task.spawn(function()
 		task.wait(3)
 		if not getgenv().KiraHubAOTR then break end
 		if IsWavesMode() then
-			pcall(KiraLH.WavesTick)
+			pcall(KiraEngine.WavesTick)
 			pcall(HandleWavesTSBuy)
 			pcall(HandleWavesBaseUpgrades)
 			pcall(HandleWavesBlessing)
