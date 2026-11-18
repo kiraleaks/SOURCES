@@ -1354,7 +1354,7 @@ function KiraM1(force)
 		VirtualInputManager:SendMouseMoveEvent(point.X, point.Y, game)
 		VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, true, game, 0)
 	end)
-	task.delay(0.04, function()
+	task.delay(0.12, function()
 		pcall(function()
 			VirtualInputManager:SendMouseButtonEvent(point.X, point.Y, 0, false, game, 0)
 		end)
@@ -1446,12 +1446,11 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 	local list = KiraBladeTargets(targetPart, validNapes)
 	if #list == 0 then return 0 end
 
-	-- The server only accepts hits that belong to a real swing, so every
-	-- blade attack taps M1 and sends ONE Slash for the whole batch; the
-	-- hitboxes are then registered inside that single swing.
+	-- Blade damage scales with velocity: apply the reference engine's
+	-- 0.25s / 250 studs/s impulse before the swing.
+	-- Click, hold 0.12s (KiraM1 schedules the release), then wait 0.15s
+	-- before the Slash, exactly like the reference blade flow.
 	KiraM1(true)
-	-- Blade damage scales with velocity: apply the reference engine's 0.25s
-	-- 250 studs/s impulse so hits land with the momentum bonus.
 	pcall(function()
 		local es = KiraEngine and KiraEngine.State
 		local _, er = KiraEngine.Char()
@@ -1461,7 +1460,9 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 			es.ImpulseUntil = os.clock() + 0.25
 		end
 	end)
-	KiraNet:Fire(postRemote, "Attacks", "Slash", true)
+	task.wait(0.27)
+	if not (targetPart and targetPart.Parent) then return 0 end
+	pcall(function() postRemote:FireServer("Attacks", "Slash", true) end)
 
 	local bossHits = math.clamp(math.floor(KiraEngine.BossMult()), 1, 60)
 	local sent = 0
@@ -1472,7 +1473,9 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 			for _ = 1, hits do
 				if sent >= 700 then break end
 				if nape.Parent then
-					KiraNet:Fire(postRemote, "Hitboxes", "Register", nape, 0.012 + math.random() * 0.024)
+					pcall(function()
+						postRemote:FireServer("Hitboxes", "Register", nape, 0.012 + math.random() * 0.024)
+					end)
 					sent = sent + 1
 				end
 			end
@@ -2157,45 +2160,15 @@ function AutoFarm:Start()
 				end
 			end
 
-			-- Colossal phase 1 is the wall-cannon stall: attacking the
-			-- Colossal there drags the character off the wall and breaks the
-			-- cannon shots, so the loop only teleports onto the cannon and
-			-- fires. Later phases keep the reference behaviour: fire one shot
-			-- when one is ready, then fight.
-			if KiraEngine.State.CannonHold
-				and not (not wavesMode and isColossalRaid and KiraEngine.ColossalOn()
-					and KiraEngine.ColossalPhase1()) then
-				KiraEngine.State.CannonHold = nil
-			end
-			if not wavesMode and isColossalRaid and KiraEngine.ColossalOn() then
-				local phase1 = KiraEngine.ColossalPhase1()
-				local cannon = phase1 and KiraEngine.ReadyCannon() or nil
-				if phase1 and cannon then
-					-- No targeting at all: clear the last target so the movement
-					-- heartbeat cannot pull the character off the cannon.
-					getgenv().KiraHub.State.TargetNape = nil
-					getgenv().KiraHub.State.ColossalNoCannonAt = nil
-					pcall(KiraEngine.CannonShot)
-					task.wait(0.05)
-					continue
-				end
-				if phase1 then
-					-- Phase 1 but no cannon assigned yet: give the game time to
-					-- hand one out, then fall back to fighting so the raid can
-					-- never soft-lock on a wrong phase read.
-					local st = getgenv().KiraHub.State
-					st.ColossalNoCannonAt = st.ColossalNoCannonAt or os.clock()
-					if os.clock() - st.ColossalNoCannonAt < 20 then
-						task.wait(0.25)
-						continue
-					end
-				else
-					getgenv().KiraHub.State.ColossalNoCannonAt = nil
-				end
-				local shot = false
+			-- Colossal phase 1 is the wall-cannon stall. Never attack the
+			-- Colossal there (it drags the character off the wall and breaks
+			-- the shots), but keep fighting the other titans between shots.
+			local colossalPhase1 = not wavesMode and isColossalRaid
+				and KiraEngine.ColossalOn() and KiraEngine.ColossalPhase1()
+			if not wavesMode and isColossalRaid and KiraEngine.ColossalOn()
+				and not KiraEngine.State.Refilling and KiraEngine.CannonReadyNow() then
 				local ok, fired = pcall(KiraEngine.CannonShot)
-				shot = ok and fired == true
-				if shot then
+				if ok and fired == true then
 					task.wait(0.05)
 					continue
 				end
@@ -2233,6 +2206,7 @@ function AutoFarm:Start()
 				if titansFolder then
 					for _, v in ipairs(titansFolder:GetChildren()) do
 						if v:IsA("Model") and KiraTitanAlive(v) then
+							if colossalPhase1 and v.Name:find("Colossal") then continue end
 							local nape = KiraNape(v)
 							if nape then
 								if IsToggled("AutoIceburstToggle") then
@@ -2637,7 +2611,7 @@ function AutoFarm:Start()
 			if KiraEngine then
 				KiraEngine.RestoreCollide()
 				KiraEngine.State.Paused = false
-				KiraEngine.State.CannonHold = nil
+				KiraEngine.State.Refilling = false
 			end
 		end)
 		end)
@@ -2668,7 +2642,6 @@ function AutoFarm:Stop()
 			KiraEngine.RestoreCollide()
 			KiraEngine.State.Paused = false
 			KiraEngine.State.Refilling = false
-			KiraEngine.State.CannonHold = nil
 		end
 	end)
 end
@@ -2848,8 +2821,9 @@ task.spawn(function()
 		if not getgenv().KiraHubAOTR then break end
 		if not IsToggled("ManualAutoAttackToggle") then continue end
 		if AutoFarm._running then continue end
-		-- Colossal phase 1: cannons only, never attack.
-		if KiraEngine and KiraEngine.ColossalPhase1() then continue end
+		-- Colossal phase 1: the cannon owns the Colossal; the adds are still
+		-- fair game, so only that one titan is skipped below.
+		local manualPhase1 = KiraEngine and KiraEngine.ColossalPhase1()
 		if getgenv().KiraHub.State.EmergencyStop then continue end
 		if isLobby or isMenu then continue end
 		local char = player.Character
@@ -2862,6 +2836,7 @@ task.spawn(function()
 		local nearbyNapes = {}
 		for _, t in ipairs(tf:GetChildren()) do
 			if t:IsA("Model") and KiraTitanAlive(t) then
+				if manualPhase1 and t.Name:find("Colossal") then continue end
 				local nape = KiraNape(t)
 				if nape then
 					local dist = (hrp.Position - nape.Position).Magnitude
@@ -3352,7 +3327,6 @@ KiraEngine = (function(Ctx)
 		Pending = setmetatable({}, { __mode = "k" }),
 		Target = nil,
 		HoldCF = nil,
-		CannonHold = nil,
 		ImpulseDir = Vector3.zero,
 		ImpulseUntil = 0,
 		ImpulseSpeed = 0,
@@ -3571,23 +3545,6 @@ KiraEngine = (function(Ctx)
 	function M.MoveStep(dt)
 		if M.MoveMode() ~= "Better Teleport" then return end
 		if not (AutoFarm and (AutoFarm._running or IsToggled("ManualAutoAttackToggle"))) then return end
-		-- Colossal phase 1: the character camps on the wall cannon. This wins
-		-- over Paused because the cannon sequence can leave the character
-		-- unattended for a couple of seconds; nothing else may write the CFrame
-		-- there or the shot gets dragged off the wall.
-		local hold = S.CannonHold
-		if hold then
-			local _, root = M.Char()
-			if root then
-				M.DisableMapCollide()
-				if (root.Position - hold).Magnitude > 1 then
-					root.CFrame = CFrame.new(hold)
-				end
-				root.AssemblyLinearVelocity = Vector3.zero
-				S.HoldCF = root.CFrame
-			end
-			return
-		end
 		if S.Paused or S.Refilling then return end
 		-- Titan form has its own stance movement in the farm loop; two writers
 		-- would fight over the CFrame every frame.
@@ -3674,6 +3631,19 @@ KiraEngine = (function(Ctx)
 		return fallback
 	end
 
+	-- Strict version: true only when a shot can actually be fired. The farm
+	-- loop uses it to decide between "shoot the Colossal" and "fight the adds
+	-- until the next cannon is loaded".
+	function M.CannonReadyNow()
+		for _, v in ipairs(M.Cannons()) do
+			if v:GetAttribute("Cooldown") == nil and v:GetAttribute("Firing") == nil
+				and (v:GetAttribute("Player") == nil or v:GetAttribute("Player") == player.Name) then
+				return true
+			end
+		end
+		return false
+	end
+
 	-- Colossal phase 1 = the wall-cannon stall. Detected from the stall
 	-- objective the game exposes (value below its requirement). Attacking the
 	-- Colossal or walking to a refill station there breaks the cannon shots.
@@ -3724,27 +3694,20 @@ KiraEngine = (function(Ctx)
 			or cannon:GetAttribute("Cooldown") ~= nil
 			or cannon:GetAttribute("Firing") ~= nil
 			or (cannon:GetAttribute("Player") ~= nil and cannon:GetAttribute("Player") ~= player.Name) then
-			-- Phase 1: every cannon is reloading. Stay on the wall (teleport to
-			-- the assigned cannon) instead of flying back to the Colossal, so
-			-- the next shot is ready the moment the cooldown ends.
-			if phase1 then
-				local spot = M.CannonSpot(cannon)
-				if spot then
-					S.CannonHold = spot
-					pcall(function() M.HoldAt(spot, 0.15) end)
-				end
-			end
 			return false
 		end
 
 		S.Paused = true
-		-- Phase 1 teleport: get onto the cannon before firing. Without it the
-		-- character hovers over the Colossal and the shot is wasted.
+		-- Teleport onto the cannon before firing (phase 1). The shot is fired
+		-- through the tagged model, so the character has to be on it; the farm
+		-- loop resumes fighting the adds as soon as this returns.
 		if phase1 then
 			local spot = M.CannonSpot(cannon)
-			if spot then
-				S.CannonHold = spot
-				pcall(function() M.HoldAt(spot, 0.15) end)
+			local _, r = M.Char()
+			if spot and r then
+				r.CFrame = CFrame.new(spot)
+				r.AssemblyLinearVelocity = Vector3.zero
+				S.HoldCF = r.CFrame
 			end
 		end
 		local hit = false
@@ -3961,7 +3924,7 @@ KiraEngine = (function(Ctx)
 		return nil, S.StationPos
 	end
 
-	function M.DoRefill(count)
+	function M.DoRefill(count, fast)
 		local station, stationPos = M.FindStation()
 		if not station and stationPos then
 			note(string.format("Refill: station not streamed, flying to (%.0f, %.0f, %.0f)",
@@ -3970,7 +3933,7 @@ KiraEngine = (function(Ctx)
 				pcall(function() player:RequestStreamAroundAsync(stationPos, 6) end)
 			end)
 			local t0 = os.clock()
-			while not station and os.clock() - t0 < 8 do
+			while not station and os.clock() - t0 < (fast and 3 or 8) do
 				if not M.HoldAt(stationPos + Vector3.new(0, 4, 0), 0.25) then return false end
 				station, stationPos = M.FindStation()
 			end
@@ -3988,15 +3951,18 @@ KiraEngine = (function(Ctx)
 		}
 		local empty = (kind == "Spears" and (KiraSpearsLeft() or 0) <= 0)
 			or (kind ~= "Spears" and KiraBladesEmpty() == true)
-		local attempts = empty and 4 or 1
+		local attempts = empty and (fast and 2 or 4) or 1
 		local done = false
 
 		for attempt = 1, attempts do
+			-- Fast (colossal phase 1) refill: give the cannon priority. If a
+			-- shot is ready the loop must fire it, not stay at the station.
+			if fast and M.CannonReadyNow() then return false end
 			if not station.Parent then
 				station = GetRefillStation() or station
 				stationPos = KiraPos(station) or stationPos
 			end
-			if not M.HoldAt(stationPos, attempt == 1 and 0.7 or 0.5) then return false end
+			if not M.HoldAt(stationPos, fast and 0.3 or (attempt == 1 and 0.7 or 0.5)) then return false end
 			local prompt = KiraPromptOf(station)
 			if prompt then
 				KiraPressPrompt(prompt)
@@ -4005,7 +3971,8 @@ KiraEngine = (function(Ctx)
 			end
 			pcall(function() postRemote:FireServer("Attacks", "Reload", station) end)
 			local t0 = os.clock()
-			while os.clock() - t0 < 3 do
+			while os.clock() - t0 < (fast and 1.2 or 3) do
+				if fast and M.CannonReadyNow() then return false end
 				if not M.HoldAt(stationPos, 0.2) then return false end
 				if refillWorked(before, kind) then done = true break end
 			end
@@ -4040,7 +4007,7 @@ KiraEngine = (function(Ctx)
 	-- The wrapper: pauses the farm, refills, then puts the character back where
 	-- it was. Every exit path clears Paused/Refilling so the farm can never
 	-- wedge in a paused state.
-	function M.RefillOnce(count)
+	function M.RefillOnce(count, fast)
 		if S.Refilling then return false end
 		local _, root = M.Char()
 		if not root then return false end
@@ -4048,7 +4015,15 @@ KiraEngine = (function(Ctx)
 		S.RefillSince = os.clock()
 		getgenv().KiraHub.State.Refilling = true
 		local waitAt = os.clock()
-		while S.Paused and os.clock() - waitAt < 6 do task.wait(0.1) end
+		while S.Paused and os.clock() - waitAt < (fast and 3 or 6) do task.wait(0.1) end
+		-- Fast path: a cannon sequence still owns the character. Do not start a
+		-- refill on top of it -- the shot clears Paused when it finishes and the
+		-- two would fight over the CFrame.
+		if fast and S.Paused then
+			S.Refilling = false
+			getgenv().KiraHub.State.Refilling = false
+			return false
+		end
 		local _, root2 = M.Char()
 		if not root2 then
 			S.Refilling = false
@@ -4057,10 +4032,10 @@ KiraEngine = (function(Ctx)
 		end
 		local hold = root2.CFrame
 		S.Paused = true
-		local ok, done, station, before = pcall(M.DoRefill, count)
+		local ok, done, station, before = pcall(M.DoRefill, count, fast)
 		if not ok then note("Refill error: " .. tostring(done)) end
 		if not ok or not station then
-			S.RefillRetryAt = os.clock() + 5
+			S.RefillRetryAt = os.clock() + (fast and 1 or 5)
 			local _, r = M.Char()
 			if r then
 				r.CFrame = hold
@@ -4073,10 +4048,10 @@ KiraEngine = (function(Ctx)
 			return false
 		end
 		if not done then
-			S.RefillRetryAt = os.clock() + 3
+			S.RefillRetryAt = os.clock() + (fast and 1 or 3)
 			note("Refill: server refused, retrying")
 		end
-		if M.Weapon() == "Spears" and (done or (KiraSpearsLeft() or 0) <= 0) then
+		if not fast and M.Weapon() == "Spears" and (done or (KiraSpearsLeft() or 0) <= 0) then
 			pcall(spearFillWait, station, before)
 		end
 		local _, r2 = M.Char()
@@ -4099,10 +4074,12 @@ KiraEngine = (function(Ctx)
 		-- (it auto-detects mission / raid / wave). Auto Farm turns it on when
 		-- it starts, so farming can never stall with no ammo.
 		if not M.Toggle("AutoReloadToggle", false) then return false end
-		-- Colossal phase 1 uses cannons only: no ammo is spent and walking to a
-		-- station would leave the wall, breaking the cannon sequence.
-		if M.ColossalPhase1() then return false end
 		local now = os.clock()
+		-- Colossal phase 1: cannon shots come first. Only start a refill while
+		-- no cannon is loaded; the fast path aborts the moment one is ready,
+		-- so the trip fits between shots.
+		local phase1 = M.ColossalPhase1()
+		if phase1 and M.CannonReadyNow() then return false end
 		if now < (S.RefillRetryAt or 0) then return false end
 		if M.IsTitan() or player:GetAttribute("Dead") == true then return false end
 		local _, root = M.Char()
@@ -4112,7 +4089,7 @@ KiraEngine = (function(Ctx)
 		local requested = getgenv().KiraHub.State.RefillRequest
 		if requested ~= nil then
 			getgenv().KiraHub.State.RefillRequest = nil
-			return M.RefillOnce()
+			return M.RefillOnce(nil, phase1)
 		end
 		local refills = KiraRefillsLeft()
 		if refills ~= nil and refills <= 0 then return false end
@@ -4135,7 +4112,7 @@ KiraEngine = (function(Ctx)
 				return false
 			end
 		end
-		return M.RefillOnce(refills)
+		return M.RefillOnce(refills, phase1)
 	end
 
 	-- ------------------------------------------------------------------
@@ -5148,7 +5125,7 @@ function BuildFarmTab(TabRef)
 		Text = "Movement Speed",
 		Default = 400,
 		Min = 100,
-		Max = 3000,
+		Max = 1500,
 		Rounding = 0
 	})
 	Options.HoverSpeedSlider:OnChanged(function() MarkDirty() end)
