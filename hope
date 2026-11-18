@@ -1767,7 +1767,7 @@ function UpdateTitanESP()
 						local label = Instance.new("TextLabel")
 						label.Size = UDim2.new(1, 0, 1, 0)
 						label.BackgroundTransparency = 1
-						label.Font = Enum.Font.Fantasy
+						label.Font = Enum.Font.Jura
 						label.TextSize = 14
 						label.TextColor3 = Color3.fromRGB(255, 255, 255)
 						label.TextStrokeTransparency = 0.3
@@ -2157,17 +2157,44 @@ function AutoFarm:Start()
 				end
 			end
 
-			-- Colossal phase 1: the reference engine's real cannon flow.
-			-- Only skip targeting when a shot actually happened (same as the
-			-- reference Step loop); otherwise keep fighting.
+			-- Colossal phase 1 is the wall-cannon stall: attacking the
+			-- Colossal there drags the character off the wall and breaks the
+			-- cannon shots, so the loop only teleports onto the cannon and
+			-- fires. Later phases keep the reference behaviour: fire one shot
+			-- when one is ready, then fight.
+			if KiraEngine.State.CannonHold
+				and not (not wavesMode and isColossalRaid and KiraEngine.ColossalOn()
+					and KiraEngine.ColossalPhase1()) then
+				KiraEngine.State.CannonHold = nil
+			end
 			if not wavesMode and isColossalRaid and KiraEngine.ColossalOn() then
-				local stallObjective = rs_ObjectiveFolder and rs_ObjectiveFolder:FindFirstChild("Stall_Colossal_Titan")
-				local stallDone = stallObjective and stallObjective.Value >= (stallObjective:GetAttribute("Requirement") or 1)
-				local shot = false
-				if not stallDone then
-					local ok, fired = pcall(KiraEngine.CannonShot)
-					shot = ok and fired == true
+				local phase1 = KiraEngine.ColossalPhase1()
+				local cannon = phase1 and KiraEngine.ReadyCannon() or nil
+				if phase1 and cannon then
+					-- No targeting at all: clear the last target so the movement
+					-- heartbeat cannot pull the character off the cannon.
+					getgenv().KiraHub.State.TargetNape = nil
+					getgenv().KiraHub.State.ColossalNoCannonAt = nil
+					pcall(KiraEngine.CannonShot)
+					task.wait(0.05)
+					continue
 				end
+				if phase1 then
+					-- Phase 1 but no cannon assigned yet: give the game time to
+					-- hand one out, then fall back to fighting so the raid can
+					-- never soft-lock on a wrong phase read.
+					local st = getgenv().KiraHub.State
+					st.ColossalNoCannonAt = st.ColossalNoCannonAt or os.clock()
+					if os.clock() - st.ColossalNoCannonAt < 20 then
+						task.wait(0.25)
+						continue
+					end
+				else
+					getgenv().KiraHub.State.ColossalNoCannonAt = nil
+				end
+				local shot = false
+				local ok, fired = pcall(KiraEngine.CannonShot)
+				shot = ok and fired == true
 				if shot then
 					task.wait(0.05)
 					continue
@@ -2610,6 +2637,7 @@ function AutoFarm:Start()
 			if KiraEngine then
 				KiraEngine.RestoreCollide()
 				KiraEngine.State.Paused = false
+				KiraEngine.State.CannonHold = nil
 			end
 		end)
 		end)
@@ -2640,6 +2668,7 @@ function AutoFarm:Stop()
 			KiraEngine.RestoreCollide()
 			KiraEngine.State.Paused = false
 			KiraEngine.State.Refilling = false
+			KiraEngine.State.CannonHold = nil
 		end
 	end)
 end
@@ -2819,6 +2848,8 @@ task.spawn(function()
 		if not getgenv().KiraHubAOTR then break end
 		if not IsToggled("ManualAutoAttackToggle") then continue end
 		if AutoFarm._running then continue end
+		-- Colossal phase 1: cannons only, never attack.
+		if KiraEngine and KiraEngine.ColossalPhase1() then continue end
 		if getgenv().KiraHub.State.EmergencyStop then continue end
 		if isLobby or isMenu then continue end
 		local char = player.Character
@@ -3238,10 +3269,10 @@ function BuildInfoTab(TabRef)
 	I_Upd:AddLabel("[+] Auto M1 + 400+ studs/s blade momentum")
 	I_Upd:AddLabel("[+] No Kill Lag (titan ragdoll stripped)")
 	I_Upd:AddLabel("[+] Blades/Spears weapon detection hardened")
-	I_Upd:AddLabel("[+] Fantasy font locked (configs cannot change it)")
+	I_Upd:AddLabel("[+] Jura font locked (configs cannot change it)")
 	I_Upd:AddLabel("[+] Raid/Wave boss targeting fixed")
 	I_Upd:AddLabel("[+] Auto Retry clicks RETRY, Force Retry uses remotes")
-	I_Upd:AddLabel("[+] UI font: Fantasy")
+	I_Upd:AddLabel("[+] UI font: Jura")
 	I_Upd:AddDivider()
 	I_Upd:AddLabel("NOTES")
 	I_Upd:AddLabel("[!] TS quests require Aberrant mode")
@@ -3321,6 +3352,7 @@ KiraEngine = (function(Ctx)
 		Pending = setmetatable({}, { __mode = "k" }),
 		Target = nil,
 		HoldCF = nil,
+		CannonHold = nil,
 		ImpulseDir = Vector3.zero,
 		ImpulseUntil = 0,
 		ImpulseSpeed = 0,
@@ -3539,6 +3571,23 @@ KiraEngine = (function(Ctx)
 	function M.MoveStep(dt)
 		if M.MoveMode() ~= "Better Teleport" then return end
 		if not (AutoFarm and (AutoFarm._running or IsToggled("ManualAutoAttackToggle"))) then return end
+		-- Colossal phase 1: the character camps on the wall cannon. This wins
+		-- over Paused because the cannon sequence can leave the character
+		-- unattended for a couple of seconds; nothing else may write the CFrame
+		-- there or the shot gets dragged off the wall.
+		local hold = S.CannonHold
+		if hold then
+			local _, root = M.Char()
+			if root then
+				M.DisableMapCollide()
+				if (root.Position - hold).Magnitude > 1 then
+					root.CFrame = CFrame.new(hold)
+				end
+				root.AssemblyLinearVelocity = Vector3.zero
+				S.HoldCF = root.CFrame
+			end
+			return
+		end
 		if S.Paused or S.Refilling then return end
 		-- Titan form has its own stance movement in the farm loop; two writers
 		-- would fight over the CFrame every frame.
@@ -3592,15 +3641,72 @@ KiraEngine = (function(Ctx)
 	local CollectionService = game:GetService("CollectionService")
 	M.CannonUsed = setmetatable({}, { __mode = "k" })
 
-	function M.MyCannon()
+	-- All wall cannons assigned to this player. In the colossal stall phase the
+	-- game hands out more than one, so hopping between them keeps the shots
+	-- coming while a single cannon is reloading.
+	function M.Cannons()
 		local ok, tagged = pcall(function() return CollectionService:GetTagged("Cannon") end)
-		if not ok or type(tagged) ~= "table" then return nil end
+		if not ok or type(tagged) ~= "table" then return {} end
+		local list = {}
 		for _, v in ipairs(tagged) do
 			if v:GetAttribute("Spawn") == player.Name and v:GetAttribute("Setup") == true then
+				list[#list + 1] = v
+			end
+		end
+		return list
+	end
+
+	function M.MyCannon()
+		return M.Cannons()[1]
+	end
+
+	-- A cannon that can be fired right now (no cooldown, not firing, owned by
+	-- this player or unclaimed). Falls back to the first assigned cannon.
+	function M.ReadyCannon()
+		local fallback
+		for _, v in ipairs(M.Cannons()) do
+			fallback = fallback or v
+			if v:GetAttribute("Cooldown") == nil and v:GetAttribute("Firing") == nil
+				and (v:GetAttribute("Player") == nil or v:GetAttribute("Player") == player.Name) then
 				return v
 			end
 		end
-		return nil
+		return fallback
+	end
+
+	-- Colossal phase 1 = the wall-cannon stall. Detected from the stall
+	-- objective the game exposes (value below its requirement). Attacking the
+	-- Colossal or walking to a refill station there breaks the cannon shots.
+	function M.ColossalPhase1()
+		local active = false
+		local function scan(folder)
+			local objective = folder and folder:FindFirstChild("Stall_Colossal_Titan")
+			if not objective then return end
+			local ok, value = pcall(function() return objective.Value end)
+			local n = ok and tonumber(value) or nil
+			if n == nil then return end
+			local req = tonumber(objective:GetAttribute("Requirement")) or 1
+			if n < req then active = true end
+		end
+		pcall(function()
+			scan(game:GetService("ReplicatedStorage"):FindFirstChild("Objectives"))
+		end)
+		pcall(function()
+			local u = workspace:FindFirstChild("Unclimbable")
+			scan(u and u:FindFirstChild("Objective"))
+		end)
+		return active
+	end
+
+	-- Where to stand to use a cannon: on the cannon itself.
+	function M.CannonSpot(cannon)
+		cannon = cannon or M.ReadyCannon()
+		if not cannon then return nil end
+		local pos
+		local ok, pivot = pcall(function() return cannon:GetPivot() end)
+		if ok and pivot then pos = pivot.Position else pos = cannon.Position end
+		if not pos then return nil end
+		return pos + Vector3.new(0, 5, 0)
 	end
 
 	function M.CannonShot()
@@ -3612,15 +3718,35 @@ KiraEngine = (function(Ctx)
 			or player:GetAttribute("Dead") == true then
 			return false
 		end
-		local cannon = M.MyCannon()
+		local phase1 = M.ColossalPhase1()
+		local cannon = M.ReadyCannon()
 		if not cannon
 			or cannon:GetAttribute("Cooldown") ~= nil
 			or cannon:GetAttribute("Firing") ~= nil
 			or (cannon:GetAttribute("Player") ~= nil and cannon:GetAttribute("Player") ~= player.Name) then
+			-- Phase 1: every cannon is reloading. Stay on the wall (teleport to
+			-- the assigned cannon) instead of flying back to the Colossal, so
+			-- the next shot is ready the moment the cooldown ends.
+			if phase1 then
+				local spot = M.CannonSpot(cannon)
+				if spot then
+					S.CannonHold = spot
+					pcall(function() M.HoldAt(spot, 0.15) end)
+				end
+			end
 			return false
 		end
 
 		S.Paused = true
+		-- Phase 1 teleport: get onto the cannon before firing. Without it the
+		-- character hovers over the Colossal and the shot is wasted.
+		if phase1 then
+			local spot = M.CannonSpot(cannon)
+			if spot then
+				S.CannonHold = spot
+				pcall(function() M.HoldAt(spot, 0.15) end)
+			end
+		end
 		local hit = false
 		pcall(function()
 			local state
@@ -3973,6 +4099,9 @@ KiraEngine = (function(Ctx)
 		-- (it auto-detects mission / raid / wave). Auto Farm turns it on when
 		-- it starts, so farming can never stall with no ammo.
 		if not M.Toggle("AutoReloadToggle", false) then return false end
+		-- Colossal phase 1 uses cannons only: no ammo is spent and walking to a
+		-- station would leave the wall, breaking the cannon sequence.
+		if M.ColossalPhase1() then return false end
 		local now = os.clock()
 		if now < (S.RefillRetryAt or 0) then return false end
 		if M.IsTitan() or player:GetAttribute("Dead") == true then return false end
@@ -4016,6 +4145,8 @@ KiraEngine = (function(Ctx)
 		if not M.Toggle("AutoTurnTitanToggle", false) then return end
 		if not M.EngineOn() then return end
 		if M.IsTitan() then return end
+		-- Colossal phase 1 is cannons only; shifting there wastes the stall.
+		if M.ColossalPhase1() then return end
 		local now = os.clock()
 		if now < (S.TitanNext or 0) then return end
 		local bar = tonumber(player:GetAttribute("Bar")) or 0
@@ -4048,6 +4179,8 @@ KiraEngine = (function(Ctx)
 	function M.SkillsTick()
 		if not M.Toggle("TitanSkillsToggle", false) then return end
 		if not M.EngineOn() then return end
+		-- Colossal phase 1: skills would pull the character off the cannon.
+		if M.ColossalPhase1() then return end
 		if UserInputService:GetFocusedTextBox() then return end
 		local char, root = M.Char()
 		if not char or not root then return end
@@ -5015,7 +5148,7 @@ function BuildFarmTab(TabRef)
 		Text = "Movement Speed",
 		Default = 400,
 		Min = 100,
-		Max = 2500,
+		Max = 3000,
 		Rounding = 0
 	})
 	Options.HoverSpeedSlider:OnChanged(function() MarkDirty() end)
@@ -6726,9 +6859,9 @@ function KiraApplyConfig(text)
 		end
 	end
 	MarkDirty()
-	-- A config can never change the font: re-assert Fantasy after applying.
+	-- A config can never change the font: re-assert Jura after applying.
 	pcall(function()
-		if Library and Library.SetFont then Library:SetFont(Enum.Font.Fantasy) end
+		if Library and Library.SetFont then Library:SetFont(Enum.Font.Jura) end
 	end)
 	return applied
 end
@@ -7350,27 +7483,27 @@ pcall(function()
 		AccentColor = Color3.fromRGB(255, 185, 50),
 		BackgroundColor = Color3.fromRGB(22, 22, 22),
 		OutlineColor = Color3.fromRGB(52, 52, 52),
-		FontFace = Enum.Font.Fantasy
+		FontFace = Enum.Font.Jura
 	})
 end)
 
 pcall(function() ThemeManager:ApplyToTab(Tabs.Settings) end)
 pcall(function() ThemeManager:LoadDefault() end)
 pcall(function() SaveManager:LoadAutoloadConfig() end)
--- UI font: Fantasy, permanently. Obsidian's SetFont takes a Font enum and
+-- UI font: Jura, permanently. Obsidian's SetFont takes a Font enum and
 -- re-applies it to every label/button already in its registry. Wrap it so any
--- saved theme / config that selects another face is coerced back to Fantasy
+-- saved theme / config that selects another face is coerced back to Jura
 -- instead of overriding it.
 do
 	local baseSetFont = Library and Library.SetFont
 	if type(baseSetFont) == "function" then
 		Library.SetFont = function(self, ...)
-			return baseSetFont(self, Enum.Font.Fantasy)
+			return baseSetFont(self, Enum.Font.Jura)
 		end
 	end
-	pcall(function() Library:SetFont(Enum.Font.Fantasy) end)
+	pcall(function() Library:SetFont(Enum.Font.Jura) end)
 	pcall(function()
-		Library.Scheme.Font = Font.fromEnum(Enum.Font.Fantasy)
+		Library.Scheme.Font = Font.fromEnum(Enum.Font.Jura)
 		Library:UpdateColorsUsingRegistry()
 	end)
 end
@@ -7379,7 +7512,7 @@ end
 task.spawn(function()
 	for _ = 1, 10 do
 		task.wait(1)
-		pcall(function() Library:SetFont(Enum.Font.Fantasy) end)
+		pcall(function() Library:SetFont(Enum.Font.Jura) end)
 	end
 end)
 pcall(function()
@@ -8409,7 +8542,7 @@ function KiraFamilyNotify(name, tier)
 		title.Position = UDim2.new(0, 22, 0, 7)
 		title.BackgroundTransparency = 1
 		title.TextColor3 = Color3.fromRGB(80, 220, 150)
-		title.Font = Enum.Font.Fantasy
+		title.Font = Enum.Font.Jura
 		title.TextSize = 14
 		title.TextXAlignment = Enum.TextXAlignment.Left
 		title.Parent = frame
@@ -8420,7 +8553,7 @@ function KiraFamilyNotify(name, tier)
 		sub.Position = UDim2.new(0, 22, 0, 27)
 		sub.BackgroundTransparency = 1
 		sub.TextColor3 = Color3.fromRGB(245, 240, 255)
-		sub.Font = Enum.Font.Fantasy
+		sub.Font = Enum.Font.Jura
 		sub.TextSize = 12
 		sub.TextXAlignment = Enum.TextXAlignment.Left
 		sub.Parent = frame
@@ -10165,7 +10298,7 @@ function SaveAllStates()
 			sliders = {},
 			dropdowns = {},
 			theme = {
-				FontFace = "Fantasy",
+				FontFace = "Jura",
 				FontWeight = "Regular"
 			},			
 			inputs = {},
