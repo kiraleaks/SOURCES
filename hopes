@@ -5015,7 +5015,7 @@ function BuildFarmTab(TabRef)
 		Text = "Movement Speed",
 		Default = 400,
 		Min = 100,
-		Max = 700,
+		Max = 1900,
 		Rounding = 0
 	})
 	Options.HoverSpeedSlider:OnChanged(function() MarkDirty() end)
