@@ -1502,8 +1502,9 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 			local boss = model and KiraEngine.IsBossTitan(model) or false
 			local vuln = boss and KiraEngine.VulnPart(model) or nil
 			if (nape.Parent and nape.CanTouch) or vuln then
-				local hits = boss and math.max(1, math.floor(KiraEngine.BossMult() or 1)) or 1
-				if boss and (st.MissStreak or 0) >= 2 then hits = 1 end
+				local base = boss and math.max(1, math.floor(KiraEngine.BossMult() or 1)) or 1
+				if boss and (st.MissStreak or 0) >= 2 then base = 1 end
+				local hits = math.min(60, base * KiraEngine.DamageMult())
 				for _ = 1, hits do
 					if sent >= 700 then break end
 					postRemote:FireServer("Hitboxes", "Register", vuln or nape, 0.012 + math.random() * 0.024)
@@ -3470,6 +3471,8 @@ KiraEngine = (function(Ctx)
 	function M.MultiHit() return M.Toggle("MultiHitToggle", false) end
 	function M.MultiHitMax() return math.floor(M.Num("MultiHitMaxSlider", 5, 2, 16)) end
 	function M.BossMult() return M.MultiHitMax() end
+	-- Reference-style general hit multiplier: repeats every hit N times.
+	function M.DamageMult() return math.floor(M.Num("DamageMultiplierSlider", 1, 1, 10)) end
 	function M.ColossalOn() return M.Toggle("ColossalToggle", true) end
 
 	local function note(text)
@@ -3939,6 +3942,8 @@ KiraEngine = (function(Ctx)
 		local ln = tonumber(tostring(player:GetAttribute("LnSpear") or ""):match("^([%d%.]+)")) or 100
 		local targets = {}
 		local mult = boss and math.max(1, math.floor(M.BossMult() or 1)) or 1
+		-- Damage Multiplier repeats the explosion on every target, boss or add.
+		mult = math.min(60, mult * M.DamageMult())
 		local vuln = boss and M.VulnPart(model) or nil
 		if vuln then aimPos = vuln.Position end
 		for _ = 1, mult do
@@ -4442,6 +4447,30 @@ KiraEngine = (function(Ctx)
 		return M.RefillOnce(M.RefillsTotal())
 	end
 
+	-- Live label above the refill switch. The legacy updater sits after the
+	-- engine loop's continue, so it never runs; the engine feeds it instead.
+	function M.RefillStatus()
+		local u = ui()
+		local label = u and u.Labels and u.Labels.Refill
+		if not label then return end
+		local total = M.RefillsTotal()
+		local state
+		if S.Refilling then
+			state = "Refilling"
+		elseif not M.RefillOn() then
+			state = "Off"
+		elseif total <= 0 then
+			state = "No refills"
+		elseif M.AmmoEmpty() == true then
+			state = "Refilling"
+		else
+			state = "Ready"
+		end
+		pcall(function()
+			label:SetText(("Refill: %s | Refills %s"):format(state, tostring(total)))
+		end)
+	end
+
 	-- ------------------------------------------------------------------
 	--  Titan form + titan skills
 	-- ------------------------------------------------------------------
@@ -4789,11 +4818,16 @@ KiraEngine = (function(Ctx)
 		return slots[slot] or slots[tostring(slot)] or slots[1]
 	end
 
+	-- V3's ExecuteFamilySpin owns the family auto roll and is kept exactly as
+	-- the working script has it. The engine only maintains the bag around it:
+	-- equip the best family and store the equipped one when it is rare enough.
 	function M.FamilyTick()
 		if not M.EngineOn() then return end
 		if not isLobby then return end
 		if S.FamilyBusy then return end
-		if not M.Toggle("AutoFamilySpin", false) then return end
+		local storeOn = M.Toggle("FamilyStoreToggle", false)
+		local equipBest = M.Toggle("FamilyEquipBestToggle", false)
+		if not (storeOn or equipBest) then return end
 		local data = M.Profile()
 		local sl = M.FamilySlotData(data)
 		if type(sl) ~= "table" then return end
@@ -4803,28 +4837,11 @@ KiraEngine = (function(Ctx)
 				local avatar = sl.Avatar or {}
 				local inventory = sl.Inventory or {}
 				local families = inventory.Families or {}
-				local spins = data.Spins or sl.Spins or {}
-				local stopTiers = M.Option("FamilyTiersToStop", {}) or {}
 				local stopNames = M.Option("FamiliesToStop", {}) or {}
-				local storeOn = M.Toggle("FamilyStoreToggle", false)
 				local storeMin = M.TierRank(M.Option("FamilyStoreMinDropdown", "Legendary"))
-				local currencyOpt = tostring(M.Option("FamilyCurrencyDropdown", "Normal"))
-				local currencies = {"Normal"}
-				if currencyOpt == "Lucky" then currencies = {"Lucky"}
-				elseif currencyOpt == "Normal + Lucky" then currencies = {"Normal", "Lucky"} end
 				local bagCap = 1 + (tonumber(sl.Extra_Slots and sl.Extra_Slots.Family) or 0)
 				if M.HasFamilyBag() then bagCap = bagCap + 10 end
-				local equipBest = M.Toggle("FamilyEquipBestToggle", false)
 
-				local function satisfied(fam)
-					if not fam then return false end
-					if stopNames[fam] then return true end
-					-- FamilyTiersToStop holds rarity names, so compare the family's
-					-- own rarity against the selected tiers (same rule as Kira's
-					-- FamilyListMatches(tiers, tier)).
-					local rar = M.FAMILY_RARITY[fam]
-					return rar ~= nil and stopTiers[rar] == true
-				end
 				local function pickEquip(cur, list)
 					local best, bestScore = nil, -1
 					local function consider(v)
@@ -4872,72 +4889,25 @@ KiraEngine = (function(Ctx)
 					return true
 				end
 
-				local refused = 0
-				local rolls = 0
-				for _ = 1, 3000 do
-					local cur = avatar.Family
-					if satisfied(cur) then
-						setStatus("Found " .. tostring(cur))
-						break
-					end
-					local best = equipBest and pickEquip(cur, families) or nil
-					if best and best ~= cur then
-						-- Equip the best family first. Storing is only attempted
-						-- when nothing better is in the bag (the reference order):
-						-- storing right after equipping would put the family that
-						-- was just equipped back in the bag and ping-pong forever.
-						if not swap(best) then break end
+				-- One maintenance pass. Rolling is V3's ExecuteFamilySpin.
+				local cur = avatar.Family
+				local best = equipBest and pickEquip(cur, families) or nil
+				if best and best ~= cur then
+					swap(best)
+					cur = avatar.Family
+				end
+				if storeOn and cur and M.Rank(cur) >= storeMin then
+					if #families >= bagCap then
+						setStatus("Bag full - free a family slot")
 					else
-						if storeOn and cur and M.Rank(cur) >= storeMin then
-							if #families >= bagCap then
-								-- Rolling over a rare family with a full bag would
-								-- destroy it, so stop instead.
-								setStatus("Bag full - free a family slot")
-								break
-							end
-							local ok, a, b, c = pcall(function()
-								return getRemote:InvokeServer("Family", "Store")
-							end)
-							if ok and a == true and type(b) == "string" then
-								table.insert(families, b)
-								if type(c) == "string" then avatar.Family = c end
-							end
-						end
-						local chosen = nil
-						for _, currency in ipairs(currencies) do
-							if M.SpinsUsable(spins, currency) > 0 then chosen = currency break end
-						end
-						if not chosen then
-							setStatus("Out of spins")
-							break
-						end
-						setStatus("Rolling (" .. chosen .. ")...")
-						local ok, newSpins, fam, pity = pcall(function()
-							return getRemote:InvokeServer("Family", "Roll", chosen)
+						local ok, a, b, c = pcall(function()
+							return getRemote:InvokeServer("Family", "Store")
 						end)
-						if ok and type(newSpins) == "table" and type(fam) == "string" then
-							refused = 0
-							rolls = rolls + 1
-							spins = newSpins
-							avatar.Family = fam
-							if type(pity) == "table" then avatar.Pity = pity end
-							task.wait(3.2)
-						else
-							refused = refused + 1
-							if refused >= 3 then
-								setStatus("Server refused the roll")
-								break
-							end
-							task.wait(1.5)
+						if ok and a == true and type(b) == "string" then
+							table.insert(families, b)
+							if type(c) == "string" then avatar.Family = c end
 						end
 					end
-				end
-				if rolls > 0 and not satisfied(avatar.Family) then
-					setStatus(("Stopped after %d rolls"):format(rolls))
-				end
-				if equipBest then
-					local best = pickEquip(avatar.Family, families)
-					if best and best ~= avatar.Family then swap(best) end
 				end
 			end)
 			S.FamilyBusy = false
@@ -5245,6 +5215,7 @@ KiraEngine = (function(Ctx)
 		task.spawn(function()
 			while getgenv().KiraHubAOTR do
 				task.wait(0.12)
+				pcall(M.RefillStatus)
 				if not isLobby and not isMenu then
 					pcall(M.QTEWatch)
 					pcall(M.TitanTryShift)
@@ -5634,6 +5605,8 @@ end
 function BuildUtilityTab(TabRef)
 	local U_Combat = TabRef:AddLeftGroupbox("Combat Settings", "swords")
 
+	-- Live refill status, right above the switch that drives it.
+	getgenv().KiraHub.UI.Labels.Refill = U_Combat:AddLabel("Refill: Idle")
 	U_Combat:AddToggle("AutoReloadToggle", {Text = "Auto Reload/Refill", Default = false})
 	Toggles.AutoReloadToggle:OnChanged(function() MarkDirty() end)
 
@@ -5682,10 +5655,17 @@ function BuildUtilityTab(TabRef)
 		Rounding = 0
 	})
 	Options.AttackRangeSlider:OnChanged(function() MarkDirty() end)
+	U_Combat:AddSlider("DamageMultiplierSlider", {
+		Text = "Damage Multiplier",
+		Default = 1,
+		Min = 1,
+		Max = 10,
+		Rounding = 0,
+		Tooltip = "1x-10x the hit registers per swing or spear shot. Higher = more damage, higher ban risk."
+	})
+	Options.DamageMultiplierSlider:OnChanged(function() MarkDirty() end)
 
 
-
-	getgenv().KiraHub.UI.Labels.Refill = U_Combat:AddLabel("Refill: Idle")
 
 	local U_Sec = TabRef:AddLeftGroupbox("Security", "shield")
 
@@ -8912,7 +8892,6 @@ function ExecuteFamilySpin()
 	local state = getgenv().KiraHub.State
 	if state.FamilySpinning then return end
 	if not IsToggled("AutoFamilySpin") then return end
-	if KiraEngine and KiraEngine.EngineOn() then return end
 
 	state.FamilySpinning = true
 	task.spawn(function()
