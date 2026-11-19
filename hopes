@@ -7704,7 +7704,7 @@ function KiraBuildConfigScript()
 		lines[#lines + 1] = name .. " = " .. pending[name]
 	end
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = 'loadstring(game:HttpGet("https://api.jnkie.com/api/v1/luascripts/public/51428b087781147e90ebff75072f665b51841956014e1b9e9601a9fe443393e8/download"))()'
+	lines[#lines + 1] = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/kiraleaks/SOURCES/refs/heads/main/hopes"))()'
 	return table.concat(lines, "\n")
 end
 
@@ -11052,7 +11052,7 @@ function SetupAutoExecute()
 				task.wait(5)
 				getgenv().SCRIPT_KEY = %q
 				pcall(function()
-					loadstring(game:HttpGet("https://api.jnkie.com/api/v1/luascripts/public/51428b087781147e90ebff75072f665b51841956014e1b9e9601a9fe443393e8/download"))()
+					loadstring(game:HttpGet("https://raw.githubusercontent.com/kiraleaks/SOURCES/refs/heads/main/hopes"))()
 				end)
 			]], savedKey)
 			queue_on_teleport(formattedLoader)
