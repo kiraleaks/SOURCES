@@ -379,29 +379,12 @@ pcall(function()
 end)
 
 function PostWebhook(url, payload)
-	if not url or url == "" then return false end
-	local success = false
-	task.spawn(function()
-		pcall(function()
-			local body = HttpService:JSONEncode(payload)
-			local headers = {["Content-Type"] = "application/json"}
-			if request then
-				request({Url = url, Method = "POST", Headers = headers, Body = body})
-				success = true
-			elseif http_request then
-				http_request({Url = url, Method = "POST", Headers = headers, Body = body})
-				success = true
-			elseif syn and syn.request then
-				syn.request({Url = url, Method = "POST", Headers = headers, Body = body})
-				success = true
-			end
-		end)
-	end)
-	return success
+	return KiraWebhook.Post(url, payload)
 end
-
 function GetWebhookURL()
-	return GetOption("MasterWebhookUrl", "")
+	local url = tostring(GetOption("WebhookURL", ""))
+	if url:gsub("%s", "") == "" then url = tostring(GetOption("MasterWebhookUrl", "")) end
+	return url
 end
 
 function GetBanStatus()
@@ -2718,6 +2701,7 @@ task.spawn(function()
 			or (IsWavesMode() and IsToggled("AutoWavesToggle"))) then continue end
 		if not player.Character then continue end
 		pcall(function() AutoFarm:Start() end)
+		pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Farming") end)
 	end
 end)
 
@@ -2935,7 +2919,7 @@ end)
 
 postRemote.OnClientEvent:Connect(function(...)
 	local args = {...}
-	if IsToggled("AutoEscapeToggle") and args[1] == "Titans" and args[2] == "Grab_Event" then
+	if (IsToggled("AutoEscapeToggle") or IsToggled("WavesEscapeToggle")) and args[1] == "Titans" and args[2] == "Grab_Event" then
 		pcall(function() pGui.Interface.Buttons.Visible = false end)
 		postRemote:FireServer("Attacks", "Slash_Escape")
 	end
@@ -3495,8 +3479,14 @@ KiraEngine = (function(Ctx)
 
 	function M.EngineOn() return true end
 	function M.Safe() return M.Toggle("SafeModeToggle", false) end
-	function M.PrioritizeBoss() return M.Toggle("PrioritizeBossToggle", true) end
-	function M.MultiHit() return M.Toggle("MultiHitToggle", false) end
+	function M.PrioritizeBoss()
+		return M.Toggle("PrioritizeBossToggle", true)
+			or (IsWavesMode() and M.Toggle("WavesPrioritizeBossToggle", false))
+	end
+	function M.MultiHit()
+		return M.Toggle("MultiHitToggle", false)
+			or (IsWavesMode() and M.Toggle("WavesMultiHitToggle", false))
+	end
 	function M.MultiHitMax() return math.floor(M.Num("MultiHitMaxSlider", 5, 2, 16)) end
 	function M.BossMult() return M.MultiHitMax() end
 	-- Reference-style general hit multiplier: repeats every hit N times.
@@ -3580,12 +3570,21 @@ KiraEngine = (function(Ctx)
 	-- ------------------------------------------------------------------
 	function M.Speed()
 		local v = tonumber(M.Option("HoverSpeedSlider", 400)) or 400
+		-- Waves flight speed has its own slider in the Waves tab.
+		if IsWavesMode() then
+			local w = tonumber(M.Option("WavesFarmSpeed", 0)) or 0
+			if w > 0 then v = w end
+		end
 		if M.Safe() then v = math.min(v, M.SAFE.Speed) end
 		return math.max(v, 100)
 	end
 
 	function M.HoverHeight()
 		if M.Safe() then return M.SAFE.Height end
+		if IsWavesMode() then
+			local h = tonumber(M.Option("WavesHoverHeight", 0)) or 0
+			if h > 0 then return h end
+		end
 		return tonumber(M.Option("FloatHeightSlider", 250)) or 250
 	end
 
@@ -4732,7 +4731,9 @@ KiraEngine = (function(Ctx)
 	--  Titan form + titan skills
 	-- ------------------------------------------------------------------
 	function M.TitanTryShift()
-		if not M.Toggle("AutoTurnTitanToggle", false) then return end
+		local titanOn = M.Toggle("AutoTurnTitanToggle", false)
+			or (IsWavesMode() and M.Toggle("WavesTitanToggle", false))
+		if not titanOn then return end
 		if not M.EngineOn() then return end
 		if M.IsTitan() then return end
 		-- Colossal phase 1 is cannons only; shifting there wastes the stall.
@@ -4767,7 +4768,12 @@ KiraEngine = (function(Ctx)
 	local SKILL_KEYS = {Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four, Enum.KeyCode.Five}
 
 	function M.SkillsTick()
-		if not M.Toggle("TitanSkillsToggle", false) then return end
+		local wavesMode = IsWavesMode()
+		local globalSkill = M.Toggle("TitanSkillsToggle", false)
+		local wavesSkill = wavesMode and M.Toggle("WavesAutoSkillToggle", false)
+		local wavesBoss = wavesMode and M.Toggle("WavesSkillBossToggle", false)
+		local wavesTitanSkill = wavesMode and M.Toggle("WavesTitanSkillToggle", false)
+		if not (globalSkill or wavesSkill or wavesBoss or wavesTitanSkill) then return end
 		if not M.EngineOn() then return end
 		-- Colossal phase 1: skills would pull the character off the cannon.
 		if M.ColossalPhase1() then return end
@@ -4777,6 +4783,13 @@ KiraEngine = (function(Ctx)
 		if player:GetAttribute("Dead") == true then return end
 		local titan = M.IsTitan()
 		local nape = getgenv().KiraHub.State.TargetNape
+		if titan and not (globalSkill or wavesTitanSkill or wavesBoss) then return end
+		if not titan and not (globalSkill or wavesSkill or wavesBoss) then return end
+		if wavesMode and not titan and not M.Toggle("WavesGroundSkillsToggle", true) then return end
+		if wavesMode and wavesBoss then
+			local model = nape and KiraNapeModel(nape)
+			if not (model and model.Parent and M.IsBossTitan(model)) then return end
+		end
 		if titan and not (nape and nape.Parent) then return end
 		for i = 1, 5 do
 			-- A titan skill is ready while Shifter_Skill_<slot> is nil.
@@ -5414,13 +5427,54 @@ KiraEngine = (function(Ctx)
 		return ok, ok and nil or "failed"
 	end
 
-	function M.WavesBase()
+	-- Exposed for the Waves tab: HUD gold, the reserve rule, the 15 s clear
+	-- window and the NPC panel click helper.
+	function M.Gold()
+		return upGold()
+	end
+
+	function M.Reserve()
+		return upReserve()
+	end
+
+	function M.UpgradeWindow()
+		return UP.clearAt ~= nil and os.clock() - UP.clearAt <= UP_GRACE
+	end
+
+	function M.OpenNpc(name, header, dialogPattern)
+		local npc = upNpc(name)
+		if not npc then
+			upWarn(name .. " not found")
+			return false
+		end
+		local wasFarm = AutoFarm and AutoFarm._running
+		if AutoFarm then
+			AutoFarm._holdUntil = os.clock() + 120
+			if wasFarm then pcall(function() AutoFarm:Stop() end) end
+		end
+		S.Refilling = true
+		local ok = pcall(function()
+			if not upOpen(header, name, dialogPattern, "Clicking [E] " .. name) then
+				error("open failed", 0)
+			end
+		end)
+		if not ok then upWarn(UP.note or "Could not open the panel") end
+		S.Refilling = false
+		if AutoFarm then
+			AutoFarm._holdUntil = 0
+			if wasFarm and upFarmOn() then pcall(function() AutoFarm:Start() end) end
+		end
+		return ok
+	end
+
+	function M.WavesBase(only)
 		if UP.charBusy or S.Refilling then return false end
 		if not IsWavesMode() then return false end
 		-- The Select Upgrades list still decides what may be bought. An empty
 		-- list means "everything", so the toggle works out of the box.
-		local picked = M.Option("BaseUpgradesSelectDropdown", {})
+		local picked = M.Option("ColePick", {})
 		local allow = type(picked) == "table" and picked or {}
+		if type(only) == "table" and next(only) ~= nil then allow = only end
 		local any = next(allow) ~= nil
 		local cards = {}
 		for _, c in ipairs(UP_CARDS) do
@@ -5498,9 +5552,9 @@ KiraEngine = (function(Ctx)
 		if type(wave) == "number" then
 			if wave < UP_EVERY or wave % UP_EVERY ~= 0 then return end
 		end
-		local wantBase = M.Toggle("AutoBuyBaseUpgradesToggle", false)
-			and wave ~= UP.charDone and os.clock() >= UP.charRetry
-		local wantGear = (M.Toggle("AutoWavesUpgradeToggle", false) or M.Toggle("AutoShopWavesToggle", false))
+		-- Cole Yeager base upgrades are driven by KiraWaves.ColeShop.
+		local wantBase = false
+		local wantGear = M.Toggle("AutoWavesUpgradeToggle", false)
 			and wave ~= UP.bladeDone and os.clock() >= UP.bladeRetry
 		if not (wantBase or wantGear) then return end
 		-- Reserve this wave before the thread starts so the next tick cannot
@@ -6038,6 +6092,1085 @@ end)({
 })
 getgenv().KiraEngine = KiraEngine
 KiraEngine.Start()
+
+-- ============================================================================
+--  [KIRA] WAVES TAB FEATURES
+--  Full wave-mode feature set: Die At, skills, equipment, blessing targets,
+--  gold priority, Orange / Cole shops and live stock readouts.
+--  No third-party branding: every widget and note uses Kira's own naming.
+-- ============================================================================
+KiraWaves = (function(Ctx)
+	local player = Ctx.player
+	local getRemote = Ctx.getRemote
+	local INTERFACE = Ctx.INTERFACE
+	local ReplicatedStorage = Ctx.ReplicatedStorage
+
+	local M = {}
+	local RARITIES = {
+		"Common", "Uncommon", "Rare", "Epic",
+		"Legendary", "Mythic", "Divine", "Secret"
+	}
+	local RANK = {
+		Common = 1, Uncommon = 2, Rare = 3, Epic = 4,
+		Legendary = 5, Mythic = 6, Divine = 7, Exclusive = 8, Secret = 9
+	}
+
+	local PRIO = {
+		"Nenhum", "Gear: Todos", "Gear: Dano", "Gear: Durabilidade",
+		"Gear: Crit Chance", "Gear: Crit Damage", "Gear: Velocidade",
+		"Gear: Controle", "Gear: Alcance", "Gear: Gás", "Base: Refills",
+		"Base: Vida Máx", "Base: Regen", "Base: Replenish", "Roll Blessing"
+	}
+	local ORANGE_CATS = { "Perks", "Artifacts", "Memories", "Shifting" }
+	local ORANGE_OPTS = {
+		Perks = "Perk Crate", Artifacts = "Artifact Crate",
+		Memories = "Memory Crate", Shifting = "Shifting"
+	}
+	-- Flat option list from the shop UI: locked entries are the plain
+	-- categories, unlocked entries are the crates.
+	local ORANGE_OPTIONS = {
+		"Perks", "Perk Crate", "Artifacts", "Artifact Crate",
+		"Memories", "Memory Crate", "Shifting"
+	}
+	local COLE_NAMES = { "Max Health", "Regen", "Replenish", "Refills", "Revive" }
+	local BLESSING_RAW = "1|Bomb Squad|C;2|Vampirism|U;3|Serrated Aura|R;4|Sheer Willpower|E;5|Compartmentalize|L;6|Bloody Tears|C;7|Airborne Dynamics|C;8|Nitroglycerin|C;9|Warm-up|C;10|High-Carbon Steel|C;11|Rocket Propellant|C;12|Oxygenated Fuel|C;13|Trained Fighter|C;14|Siphoned Speed|C;15|Increased Gas Pressure|C;16|Synergy|C;17|Attunement|C;18|Quality Components|C;19|Plagued|C;20|Full Rack|U;21|Bloodthinner|U;22|Plague Doctor|U;23|Rejuvenated|U;24|Stronger Concentration|U;25|Alchemist|U;26|Timed Berserker|U;27|Definitive Strike|R;28|Safestrike|R;29|Strongest Vessel|R;30|Fragile Armor|R;31|Equivalent Exchange|R;32|Infection|R;33|Butcher's Fever|R;34|Overstock|E;35|Go Beyond|E;36|Inspirational Drive|E;37|7 7 7|E;38|Hero's Power|L;39|Hero's Knowledge|L;40|Modern Splint|C;41|Founder's Ferver|C;42|Supreme Vigor|C;43|Demonic Blood|C;44|Knight's Honor|U;45|Modern Medicine|U;46|Last Shot|U;47|Greatshield|R;48|Spirit of a Boar|R;49|Instinct|R;50|+1 UP|R;51|Overcharge|E;52|Facade|L;53|The Paladin|L;54|Grinded Herbs|C;55|Manhattan Project|C;56|Priest of the Founder|C;57|Call of the Tank|C;58|Instructor|C;59|Chemical Purifier|C;60|Energy Drain|U;61|Bolstered Spirit|U;62|Witch Doctor|U;63|Bastion|U;64|Blessed Team|R;65|Supplier|R;66|Team Coordination|E;67|Founder's Hunger|E;68|Hero's Inspiration|E;69|Followed Footsteps|L;70|Leadership Training|L"
+	local R_SHORT = { C = "Common", U = "Uncommon", R = "Rare", E = "Epic", L = "Legendary" }
+
+	M.Prio = PRIO
+	M.OrangeCats = ORANGE_CATS
+	M.OrangeOptions = ORANGE_OPTIONS
+	M.ColeNames = COLE_NAMES
+	M.Rarities = RARITIES
+
+	local blessingList, blessingIds = {}, {}
+	for id, name, short in BLESSING_RAW:gmatch("(%d+)|([^|;]+)|(%a)") do
+		local label = name .. " [" .. (R_SHORT[short] or "Common") .. "]"
+		blessingList[#blessingList + 1] = label
+		blessingIds[label] = id
+	end
+	M.Blessings = blessingList
+
+	-- ------------------------------------------------------------------
+	--  Small option / state helpers
+	-- ------------------------------------------------------------------
+	local function T(name, default)
+		if IsToggled(name) then return true end
+		if default == true then
+			local hub = getgenv().KiraHub
+			local u = hub and hub.UI
+			if u and u.Toggles and u.Toggles[name] and u.Toggles[name].Value ~= nil then
+				return u.Toggles[name].Value == true
+			end
+		end
+		return false
+	end
+
+	local function O(name, default)
+		return GetOption(name, default)
+	end
+
+	local function sel(name)
+		local v = O(name, {})
+		return type(v) == "table" and v or {}
+	end
+
+	local function waves()
+		return IsWavesMode() or workspace:GetAttribute("Type") == "Waves"
+	end
+	M.Waves = waves
+
+	local function gold()
+		local ok, v = pcall(function() return KiraEngine and KiraEngine.Gold() end)
+		return ok and tonumber(v) or nil
+	end
+	M.Gold = gold
+
+	local function reserve()
+		return tonumber(O("GoldReserveSlider", 5000)) or 5000
+	end
+	M.Reserve = reserve
+
+	local function canSpend(cost)
+		local have = gold()
+		if not have then return true end
+		return have - (tonumber(cost) or 0) >= reserve()
+	end
+
+	local function note(text)
+		pcall(function()
+			Library:Notify({Title = "Waves", Description = tostring(text), Time = 4})
+		end)
+	end
+	M.Note = note
+
+	local function rewardsVisible()
+		local ok, v = pcall(function()
+			local r = INTERFACE and INTERFACE:FindFirstChild("Rewards")
+			return r ~= nil and r.Visible == true
+		end)
+		return ok and v == true
+	end
+	M.RewardsVisible = rewardsVisible
+
+	local function currentWave()
+		local n
+		pcall(function()
+			local c = INTERFACE and INTERFACE:FindFirstChild("HUD")
+			c = c and c:FindFirstChild("Objectives")
+			c = c and c:FindFirstChild("Main")
+			c = c and c:FindFirstChild("Clearance")
+			n = c and tonumber(tostring(c.Text):match("/%s*(%d+)%s*%]"))
+		end)
+		return n
+	end
+	M.CurrentWave = currentWave
+
+	-- ------------------------------------------------------------------
+	--  Die At: end the run on the chosen wave so the reward screen opens.
+	-- ------------------------------------------------------------------
+	M.DieWave = function()
+		if not T("WavesDieAtToggle", false) or not waves() then return end
+		local target = math.floor(tonumber(O("WavesDieAtInput", 10)) or 10)
+		local cur = currentWave()
+		if not cur or target < 1 or target > cur then return end
+		if rewardsVisible() then return end
+		if KiraEngine and (KiraEngine.State.Refilling or KiraEngine.State.Upgrading) then return end
+		if M._diedWave == cur then return end
+		M._diedWave = cur
+		local char = player.Character
+		local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			note("Die At: wave " .. cur .. " reached")
+			pcall(function() humanoid.Health = 0 end)
+		end
+	end
+
+	-- ------------------------------------------------------------------
+	--  Blessings: exact spin path and cost formula from the reference,
+	--  with Kira's gold reserve and the picked-blessing stop condition.
+	-- ------------------------------------------------------------------
+	function M.BlessingTargets()
+		local picked = sel("WavesBlessingDropdown")
+		local ids = {}
+		for name, on in pairs(picked) do
+			if on and blessingIds[name] then ids[#ids + 1] = blessingIds[name] end
+		end
+		return ids
+	end
+
+	function M.BlessingDone()
+		local ids = M.BlessingTargets()
+		if #ids == 0 then return false end
+		local d = KiraEngine and KiraEngine.Stats and KiraEngine.Stats() or nil
+		if type(d) ~= "table" or type(d.Blessings) ~= "table" then return false end
+		local have = {}
+		for _, part in ipairs({ d.Blessings.Storage, d.Blessings.Active }) do
+			for k, v in pairs(type(part) == "table" and part or {}) do
+				have[tostring(k)] = true
+				if type(v) ~= "table" then have[tostring(v)] = true end
+			end
+		end
+		for _, id in ipairs(ids) do
+			if not have[tostring(id)] then return false end
+		end
+		return true
+	end
+
+	function M.BlessingTick()
+		if not waves() then return end
+		local roll = T("AutoRollBlessingToggle", false)
+		local picked = T("WavesAutoRollPickToggle", false)
+		if not roll and not picked then return end
+		if os.clock() - (M._lastRoll or 0) < 6 then return end
+		if M.BlessingDone() then
+			player:SetAttribute("KiraRollDone", true)
+			return
+		end
+		player:SetAttribute("KiraRollDone", nil)
+
+		local d = KiraEngine and KiraEngine.Stats and KiraEngine.Stats() or nil
+		local rolled = 0
+		local unworthy = 1
+		pcall(function()
+			if type(d) == "table" and type(d.Blessings) == "table" then
+				rolled = tonumber(d.Blessings.Rolled) or 0
+			end
+			unworthy = tostring(workspace:GetAttribute("Modifiers") or ""):find("Unworthy") and 1.125 or 1
+		end)
+		local cost = math.ceil(2000 * (1.43 ^ rolled) * unworthy)
+		if not canSpend(cost) then return end
+		M._lastRoll = os.clock()
+		pcall(function()
+			getRemote:InvokeServer("Waves", "Blessing", "Spin")
+		end)
+	end
+
+	-- ------------------------------------------------------------------
+	--  Auto Equip Best. The reference runs this in an actor over its own
+	--  module table; here the same storage/active comparison is done on the
+	--  best-effort Stats snapshot before the equipment state remote is used.
+	-- ------------------------------------------------------------------
+	function M.EquipBest()
+		if not T("WavesAutoEquip", false) or not waves() then return end
+		if os.clock() - (M._lastEquip or 0) < 8 then return end
+		M._lastEquip = os.clock()
+		local d = KiraEngine and KiraEngine.Stats and KiraEngine.Stats() or nil
+		if type(d) ~= "table" then return end
+		local cats = { "Skills", "Perks", "Memories", "Artifacts", "Blessings", "Shifting" }
+		for _, cat in ipairs(cats) do
+			local group = d[cat]
+			if type(group) == "table" then
+				local active = type(group.Active) == "table" and group.Active or {}
+				local storage = type(group.Storage) == "table" and group.Storage or {}
+				local bestId, bestRank = nil, 0
+				local equipped = {}
+				for id in pairs(active) do equipped[tostring(id)] = true end
+				for id, item in pairs(storage) do
+					local key = tostring(id)
+					if not equipped[key] then
+						local rarity = type(item) == "table" and (item.Rarity or item.rarity) or nil
+						local r = RANK[tostring(rarity or "")] or 0
+						if not rarity then
+							for rr, tbl in pairs(RANK) do
+								local set = type(d[cat]) == "table" and d[cat][rr] or nil
+								if type(set) == "table" and set[id] then r = tbl break end
+							end
+						end
+						if r > bestRank then bestRank, bestId = r, id end
+					end
+				end
+				if bestId then
+					for slot = 1, 3 do
+						pcall(function()
+							getRemote:InvokeServer("S_Equipment", "State", cat, "Equip", bestId, slot)
+						end)
+					end
+				end
+			end
+		end
+	end
+
+	-- ------------------------------------------------------------------
+	--  Gold priority. Five slots are evaluated in order, once per cleared
+	--  wave, inside the same 15 s upgrade window as the other upgrades.
+	-- ------------------------------------------------------------------
+	local function prioAction(choice)
+		if choice == "Nenhum" or choice == "" then return false end
+		if choice == "Roll Blessing" then
+			M.BlessingTick()
+			return true
+		end
+		if choice:find("Base:", 1, true) then
+			local names = {
+				["Base: Refills"] = "Refills", ["Base: Vida Máx"] = "Max",
+				["Base: Regen"] = "Regen", ["Base: Replenish"] = "Replenish"
+			}
+			local filter = names[choice]
+			if filter then
+				pcall(function() KiraEngine.WavesBase({ [filter] = true }) end)
+			end
+			return true
+		end
+		if choice:find("Gear:", 1, true) then
+			-- Lulu's UPGRADE ALL is the only reliable gear purchase path.
+			pcall(function() KiraEngine.WavesGear() end)
+			return true
+		end
+		return false
+	end
+
+	function M.GoldPriority()
+		if not waves() then return end
+		if not KiraEngine.UpgradeWindow() then return end
+		if os.clock() - (M._lastPrio or 0) < 3 then return end
+		M._lastPrio = os.clock()
+		for i = 1, 5 do
+			local choice = O("WavesPrio" .. i, "Nenhum")
+			if prioAction(choice) then return end
+		end
+	end
+
+	-- ------------------------------------------------------------------
+	--  NPC shops
+	-- ------------------------------------------------------------------
+	local function shopItems()
+		local list = {}
+		local w = workspace:FindFirstChild("Waves")
+		local items = w and w:FindFirstChild("Items")
+		for _, cat in ipairs(ORANGE_CATS) do
+			local folder = items and items:FindFirstChild(cat)
+			for _, child in ipairs(folder and folder:GetChildren() or {}) do
+				local locked = child:GetAttribute("Locked")
+				local opt = locked == nil and (ORANGE_OPTS[cat] or cat) or cat
+				local value = child.Name
+				pcall(function()
+					if child:IsA("ValueBase") then value = child.Value end
+				end)
+				list[#list + 1] = {
+					cat = cat,
+					id = child:GetAttribute("ID"),
+					opt = opt,
+					name = tostring(value),
+					rarity = tostring(child:GetAttribute("Rarity") or "?"),
+					price = tonumber(child:GetAttribute("Price")) or math.huge,
+					stock = tonumber(child:GetAttribute("Stock")) or 0,
+				}
+			end
+		end
+		return list
+	end
+	M.ShopItems = shopItems
+
+	local function fmtGold(v)
+		v = tonumber(v) or 0
+		if v >= 1000000 then return string.format("%.1fM", v / 1000000) end
+		if v >= 10000 then return string.format("%.1fk", v / 1000) end
+		return tostring(math.floor(v))
+	end
+
+	function M.ShopText(kind)
+		if not waves() then return "Only inside a Waves match." end
+		if kind == "cole" then
+			local lines = { "Gold: " .. fmtGold(gold()) }
+			local w = workspace:FindFirstChild("Waves")
+			local upgrades = w and w:FindFirstChild("Upgrades")
+			for _, name in ipairs(COLE_NAMES) do
+				local f = upgrades and upgrades:FindFirstChild(name)
+				local lvl = f and (f:FindFirstChild("Level") or f:GetAttribute("Level") or f:GetAttribute("Value"))
+				lines[#lines + 1] = name .. ": " .. tostring(lvl or "?")
+			end
+			return table.concat(lines, "\n")
+		end
+		local list = shopItems()
+		local byCat, lines = {}, { "Gold: " .. fmtGold(gold()) }
+		for _, item in ipairs(list) do
+			byCat[item.cat] = byCat[item.cat] or {}
+			if item.stock > 0 then
+				byCat[item.cat][#byCat[item.cat] + 1] = string.format(
+					"%s [%s] %s x%d", item.name, item.rarity, fmtGold(item.price), item.stock
+				)
+			end
+		end
+		for _, cat in ipairs(ORANGE_CATS) do
+			local entries = byCat[cat] or {}
+			lines[#lines + 1] = cat .. ": " .. (#entries > 0 and table.concat(entries, ", ") or "sold out")
+		end
+		return table.concat(lines, "\n")
+	end
+
+	function M.OpenShop(who)
+		if not waves() then note("Only inside a Waves match.") return end
+		if who == "cole" then
+			pcall(function()
+				KiraEngine.OpenNpc("Cole", "upgrades", "^%[?e%]?%s*upgrades?$")
+			end)
+		else
+			pcall(function()
+				KiraEngine.OpenNpc("Orange", "market", "^%[?e%]?%s*market$")
+			end)
+		end
+	end
+
+	function M.RefreshShop()
+		if not waves() then return end
+		pcall(function() getRemote:InvokeServer("Waves", "Item", "Refresh") end)
+		pcall(function()
+			if postRemote then postRemote:FireServer("Waves", "Refresh") end
+		end)
+		M.UpdateLabels()
+	end
+
+	function M.RefreshCole()
+		if not waves() then note("Only inside a Waves match.") return end
+		M._coleNow = true
+		pcall(M.RefreshShop)
+		M._coleNow = nil
+	end
+
+	function M.OrangeShop()
+		if not waves() then return end
+		local all = T("WavesOrangeAll", false)
+		local useSel = T("WavesOrangeSelected", false)
+		if not all and not useSel then return end
+		if os.clock() - (M._lastShop or 0) < 5 then return end
+		M._lastShop = os.clock()
+		local chosen = sel("OrangePick")
+		local haveGold = gold()
+		local capacity = tonumber(player:GetAttribute("Capacity")) or 0
+		local bought = 0
+		for _, item in ipairs(shopItems()) do
+			if item.stock > 0 and item.id and (all or chosen[item.opt]) then
+				local qty = math.min(item.stock, math.floor((haveGold or 0) / item.price), 1000 - capacity)
+				qty = (item.opt == "Perk Crate" or item.opt == "Artifact Crate"
+					or item.opt == "Memory Crate" or item.opt == "Shifting") and 1 or qty
+				if qty >= 1 and canSpend(item.price * qty) then
+					local ok, res = pcall(function()
+						return getRemote:InvokeServer("Waves", "Item", "Buy", item.cat, item.id, qty)
+					end)
+					if ok and res == true then
+						haveGold = (haveGold or 0) - item.price * qty
+						capacity = capacity + qty
+						bought = bought + qty
+						task.wait(0.35)
+					end
+				end
+			end
+		end
+		if bought > 0 then M.UpdateLabels() end
+	end
+
+	function M.ColeShop()
+		if not waves() then return end
+		-- Base upgrades obey the same 15 s clear window as every other upgrade.
+		if not KiraEngine.UpgradeWindow() then return end
+		if os.clock() - (M._lastCole or 0) < 3 then return end
+		local all = T("WavesColeAll", false)
+		local useSel = T("ColeSelected", false)
+		if not all and not useSel then return end
+		M._lastCole = os.clock()
+		local chosen = sel("ColePick")
+		if useSel and not all then
+			local filter = {}
+			for name, on in pairs(chosen) do if on then filter[name] = true end end
+			if next(filter) then pcall(function() KiraEngine.WavesBase(filter) end) end
+		else
+			pcall(function() KiraEngine.WavesBase() end)
+		end
+	end
+
+	function M.UpdateLabels()
+		local labels = getgenv().KiraHub and getgenv().KiraHub.UI and getgenv().KiraHub.UI.Labels
+		if not labels then return end
+		pcall(function()
+			if labels.OrangeStock then labels.OrangeStock:SetText(M.ShopText("orange")) end
+		end)
+		pcall(function()
+			if labels.ColeStock then labels.ColeStock:SetText(M.ShopText("cole")) end
+		end)
+	end
+
+	-- ------------------------------------------------------------------
+	--  Workers
+	-- ------------------------------------------------------------------
+	function M.Tick()
+		if not waves() then return end
+		pcall(M.DieWave)
+		pcall(M.BlessingTick)
+		pcall(M.EquipBest)
+		pcall(M.OrangeShop)
+		pcall(M.ColeShop)
+	end
+
+	function M.FastTick()
+		if not waves() then return end
+		pcall(M.DieWave)
+		pcall(M.GoldPriority)
+	end
+
+	function M.Start()
+		if M._started then return end
+		M._started = true
+		task.spawn(function()
+			while getgenv().KiraHubAOTR do
+				task.wait(0.5)
+				pcall(M.FastTick)
+			end
+		end)
+		task.spawn(function()
+			while getgenv().KiraHubAOTR do
+				task.wait(5)
+				if waves() then pcall(M.UpdateLabels) end
+			end
+		end)
+	end
+
+	return M
+end)({
+	player = player,
+	getRemote = getRemote,
+	postRemote = postRemote,
+	INTERFACE = INTERFACE,
+	ReplicatedStorage = ReplicatedStorage,
+})
+getgenv().KiraWaves = KiraWaves
+
+-- ============================================================================
+--  [KIRA] WEBHOOK ENGINE
+--  Discord delivery, reward-screen detection, rarity drops, session stats and
+--  disconnect alerts. Field names and send flow follow the reference exactly;
+--  all names/branding shown in Discord are Kira's own.
+-- ============================================================================
+KiraWebhook = (function(Ctx)
+	local player = Ctx.player
+	local HttpService = Ctx.HttpService
+	local ReplicatedStorage = Ctx.ReplicatedStorage
+	local INTERFACE = Ctx.INTERFACE
+	local TeleportService = Ctx.TeleportService
+
+	local M = {
+		sentHere = false,
+		RARITIES = {
+			"Common", "Uncommon", "Rare", "Epic",
+			"Legendary", "Mythic", "Divine", "Secret"
+		},
+		STATS_FILE = "kira_stats.json",
+	}
+	getgenv().KiraWebhook = M
+
+	local function T(name)
+		return IsToggled(name) == true
+	end
+
+	local function O(name, default)
+		return GetOption(name, default)
+	end
+
+	local function TR(v)
+		if v == nil then return nil end
+		return tostring(v)
+	end
+
+	-- Exact clamp from the reference: whitespace-only values fall back and
+	-- overlong strings are cut with an ellipsis.
+	local function clip(value, maxLen, fallback)
+		local s = value == nil and "" or tostring(value)
+		if s:gsub("%s", "") == "" then s = fallback or "-" end
+		if #s > maxLen then s = s:sub(1, maxLen - 3) .. "..." end
+		return s
+	end
+	M.Clip = clip
+
+	-- ------------------------------------------------------------------
+	--  Session stats (kira_stats.json)
+	-- ------------------------------------------------------------------
+	function M.GetStats()
+		local ok, result = pcall(function()
+			return HttpService:JSONDecode(readfile(M.STATS_FILE))
+		end)
+		if ok and type(result) == "table" then return result end
+		return { missions = 0, start = os.time() }
+	end
+
+	function M.SaveStats(data)
+		pcall(function()
+			writefile(M.STATS_FILE, HttpService:JSONEncode(data))
+		end)
+	end
+
+	function M.ResetStats()
+		M.SaveStats({ missions = 0, start = os.time() })
+	end
+
+	local function fmtTime(secs)
+		secs = math.max(0, math.floor(tonumber(secs) or 0))
+		return string.format("%dh%02dm", math.floor(secs / 3600), math.floor(secs % 3600 / 60))
+	end
+	M.FmtTime = fmtTime
+
+	-- ------------------------------------------------------------------
+	--  Send: the exact request chain, URL validation and embed assembly.
+	-- ------------------------------------------------------------------
+	function M.Send(title, description, fields, color, content)
+		local tTitle = TR(title)
+		local tDesc = TR(description)
+		local tContent = TR(content)
+
+		if type(fields) == "table" then
+			for _, field in ipairs(fields) do
+				field.name = TR(field.name)
+				field.value = TR(field.value)
+			end
+		end
+
+		local url = tostring(O("MasterWebhookUrl", "")):gsub("%s", "")
+		if not url:match("^https://[%w%.]*discord%.com/api/webhooks/%d+/[%w%-_]+")
+			and not url:match("^https://[%w%.]*discordapp%.com/api/webhooks/%d+/[%w%-_]+")
+		then
+			return false, "invalid link"
+		end
+
+		local requestFn = request or http_request
+			or (syn and syn.request) or (http and http.request)
+			or (fluxus and fluxus.request)
+		if type(requestFn) ~= "function" then
+			return false, "executor has no request()"
+		end
+
+		local userId = tostring(O("WebhookUserId", "")):match("^%d+$")
+		local okFields, builtFields = pcall(function()
+			local out = {}
+			local list = type(fields) == "table" and fields or {}
+			for i, field in ipairs(list) do
+				if i > 25 then break end
+				out[#out + 1] = {
+					name = clip(field.name, 256, "-"),
+					value = clip(field.value, 1024, "-"),
+					inline = field.inline == true,
+				}
+			end
+			return out
+		end)
+
+		local embed = {
+			title = clip(tTitle, 256, "Kira Hub"),
+			color = tonumber(color) or 10309119,
+			fields = okFields and builtFields or {},
+			footer = { text = clip("Kira Hub - " .. player.Name, 2048) },
+		}
+		if tDesc ~= nil and tostring(tDesc):gsub("%s", "") ~= "" then
+			embed.description = clip(tDesc, 4000)
+		end
+
+		local function size()
+			local n = #embed.title + #embed.footer.text + #(embed.description or "")
+			for _, field in ipairs(embed.fields) do
+				n = n + #field.name + #field.value
+			end
+			return n
+		end
+
+		while size() > 5800 and #embed.fields > 0 do
+			table.remove(embed.fields)
+		end
+		if size() > 5800 and embed.description then
+			embed.description = clip(embed.description, 1500)
+		end
+		pcall(function() embed.timestamp = DateTime.now():ToIsoDate() end)
+
+		local payload = {
+			username = "Kira Hub",
+			allowed_mentions = userId and { users = { userId } } or { parse = {} },
+			embeds = { embed },
+		}
+		if tContent ~= nil and tostring(tContent) ~= "" then
+			payload.content = clip(tContent, 1900)
+		end
+
+		local okJson, body = pcall(function() return HttpService:JSONEncode(payload) end)
+		if not okJson then return false, "could not build message" end
+
+		local okReq, res = pcall(requestFn, {
+			Url = url,
+			Method = "POST",
+			Headers = { ["Content-Type"] = "application/json" },
+			Body = body,
+		})
+		if not okReq then return false, "request failed: " .. tostring(res) end
+
+		local code = type(res) == "table" and tonumber(
+			res.StatusCode or res.Status or res.status_code or res.statusCode
+		) or nil
+		if type(res) == "table" and (res.Success == true or (code and code >= 200 and code < 300)) then
+			return true, tostring(code or "ok")
+		end
+
+		local reason = tostring(code or "?")
+		if code == 404 or code == 401 then
+			reason = reason .. " (link deleted or wrong)"
+		elseif code == 429 then
+			reason = reason .. " (too many messages, wait)"
+		end
+		return false, reason
+	end
+
+	-- Raw payload sender used by Kira's existing event dispatchers.
+	function M.Post(url, payload)
+		if not url or url == "" then return false end
+		local requestFn = request or http_request
+			or (syn and syn.request) or (http and http.request)
+			or (fluxus and fluxus.request)
+		if type(requestFn) ~= "function" then return false end
+		local ok, body = pcall(function() return HttpService:JSONEncode(payload) end)
+		if not ok then return false end
+		local sent = pcall(requestFn, {
+			Url = url, Method = "POST",
+			Headers = { ["Content-Type"] = "application/json" },
+			Body = body,
+		})
+		return sent
+	end
+
+	-- ------------------------------------------------------------------
+	--  Reward-screen scraping
+	-- ------------------------------------------------------------------
+	function M.RewardTexts()
+		local r = INTERFACE and INTERFACE:FindFirstChild("Rewards")
+		if not r then return {} end
+		local out, seen = {}, {}
+		for _, d in ipairs(r:GetDescendants()) do
+			if d:IsA("TextLabel") and d.Text ~= "" and d.Visible and not seen[d.Text] then
+				local shown = true
+				local p = d.Parent
+				while p and p ~= r do
+					if p:IsA("GuiObject") and not p.Visible then shown = false break end
+					p = p.Parent
+				end
+				if shown then
+					seen[d.Text] = true
+					out[#out + 1] = d.Text
+				end
+			end
+		end
+		return out
+	end
+
+	local itemNames
+	local function buildItemNames()
+		itemNames = {}
+		pcall(function()
+			local Items = ReplicatedStorage and ReplicatedStorage:FindFirstChild("Modules")
+			Items = Items and Items:FindFirstChild("Storage", true)
+			Items = Items and Items:FindFirstChild("Items")
+			local ok, result = pcall(require, Items)
+			if not ok and setthreadidentity and getthreadidentity then
+				local identity = getthreadidentity()
+				setthreadidentity(2)
+				ok, result = pcall(require, Items)
+				setthreadidentity(identity)
+			end
+			local data = ok and type(result) == "table" and result or {}
+			for k, v in pairs(data) do
+				local img = type(v) == "table" and tostring(v.Image or ""):match("%d+")
+				if img then
+					itemNames[img] = itemNames[img] and itemNames[img] .. "/" .. k or k
+				end
+			end
+		end)
+	end
+
+	function M.RewardInfo()
+		local r = INTERFACE and INTERFACE:FindFirstChild("Rewards")
+		local info = r and r:FindFirstChild("Main")
+		info = info and info:FindFirstChild("Info")
+		if not info then return nil end
+		if not itemNames then buildItemNames() end
+
+		local out = {
+			state = info:FindFirstChild("State") and info.State.Text or "?",
+			stats = {},
+			items = {},
+			rare = {},
+		}
+		local main = info:FindFirstChild("Main")
+		local stats = main and main:FindFirstChild("Stats")
+		for _, child in ipairs(stats and stats:GetChildren() or {}) do
+			local amount, label = child:FindFirstChild("Amount"), child:FindFirstChild("Stat")
+			if amount and label and child.Visible ~= false then
+				out.stats[#out.stats + 1] = { label.Text, amount.Text }
+			end
+		end
+
+		local wanted = O("WebhookRare", {})
+		local wantedSet = type(wanted) == "table" and wanted or {}
+		local items = main and main:FindFirstChild("Items")
+		for _, v in ipairs(items and items:GetChildren() or {}) do
+			if v:IsA("GuiObject") and v.Visible then
+				local icon, qty = v:FindFirstChild("Icon", true), v:FindFirstChild("Quantity", true)
+				local img = icon and tostring(icon.Image):match("%d+$")
+				local name = (img and itemNames[img] or "Item"):gsub("_", " ")
+				local rarity = M.RARITIES[tonumber(v.Name:match("_(%d+)$") or "")]
+				out.items[#out.items + 1] = name .. ": " .. (qty and qty.Text or "?")
+					.. (rarity and " (" .. rarity .. ")" or "")
+				if rarity and wantedSet[rarity] then
+					out.rare[#out.rare + 1] = name .. " (" .. rarity .. ")"
+				end
+			end
+		end
+		return out
+	end
+	M.RewardInfo = M.RewardInfo
+
+	-- ------------------------------------------------------------------
+	--  Event dispatchers
+	-- ------------------------------------------------------------------
+	function M.MissionFields(info, statsData)
+		local s = M.GetStats()
+		s.missions = (tonumber(s.missions) or 0) + 1
+		M.SaveStats(s)
+
+		local attrs = workspace:GetAttributes()
+		local mode = tostring(attrs.Type or "?")
+			.. (attrs.Objective and " | " .. tostring(attrs.Objective) or "")
+		local fields = {
+			{ name = "Resultado", value = info.state or "?", inline = false },
+			{ name = "Modo", value = mode, inline = true },
+			{ name = "Dificuldade", value = tostring(attrs.Difficulty or "?"), inline = true },
+			{ name = "Reward Boost", value = attrs.Boosted and "Sim" or "Não", inline = true },
+			{ name = "Level", value = tostring(player:GetAttribute("Level") or "?"), inline = true },
+			{ name = "Missões na sessão", value = tostring(s.missions), inline = true },
+			{ name = "Tempo de sessão", value = fmtTime(os.time() - (tonumber(s.start) or os.time())), inline = true },
+		}
+		for _, stat in ipairs(info.stats or {}) do
+			fields[#fields + 1] = { name = stat[1], value = stat[2], inline = true }
+		end
+		if #(info.items or {}) > 0 then
+			local text = table.concat(info.items, "\n")
+			if #text > 1000 then text = text:sub(1, 1000) .. "..." end
+			fields[#fields + 1] = { name = "Itens obtidos", value = text, inline = false }
+		end
+		if statsData and statsData.Total then
+			local total = statsData.Total
+			fields[#fields + 1] = {
+				name = "Informações da Conta",
+				value = "Level: " .. tostring(total.Level or "?")
+					.. " | Prestige: " .. tostring(total.Prestige or "?")
+					.. "\nGold: " .. tostring(total.Gold or "?")
+					.. " | Gems: " .. tostring(total.Gems or "?")
+					.. "\nGames: " .. tostring(getgenv().KiraHub.State.GamesPlayed or "?"),
+				inline = false,
+			}
+		end
+		return fields
+	end
+
+	function M.DispatchMission(data)
+		if not T("WebhookOn") and not T("ToggleRewardWebhook") then return end
+		local info = M.RewardInfo()
+		if not info then
+			info = { state = "?", stats = {}, items = {}, rare = {} }
+		end
+		if type(data) == "table" and data.Stats then
+			for stat, amount in pairs(data.Stats) do
+				info.stats[#info.stats + 1] = { tostring(stat), tostring(amount) }
+			end
+		end
+		if type(data) == "table" and data.Items then
+			for item, qty in pairs(data.Items) do
+				info.items[#info.items + 1] = tostring(item) .. ": " .. tostring(qty)
+			end
+		end
+		local fields = M.MissionFields(info, data)
+		local rare = info.rare or {}
+		local failed = tostring(info.state):upper():find("FAIL") ~= nil
+		if #rare > 0 then
+			local userId = tostring(O("WebhookUserId", "")):match("^%d+$")
+			local mention = userId and ("<@" .. userId .. "> ") or ""
+			M.Send("DROP RARO!", "**" .. table.concat(rare, "\n") .. "**", fields,
+				16762941, mention .. "Drop raro: " .. table.concat(rare, ", "))
+		elseif T("WebhookMission") or T("ToggleRewardWebhook") then
+			M.Send(failed and "Missão falhou" or "Missão concluída", nil, fields,
+				failed and 16732240 or 10309119)
+		end
+	end
+
+	function M.DispatchRare(items)
+		if not T("WebhookOn") and not T("ToggleMythicalFamilyWebhook") then return end
+		local list = {}
+		for name, rarity in pairs(type(items) == "table" and items or {}) do
+			list[#list + 1] = name .. " (" .. tostring(rarity) .. ")"
+		end
+		if #list == 0 then return end
+		local userId = tostring(O("WebhookUserId", "")):match("^%d+$")
+		M.Send("DROP RARO!", "**" .. table.concat(list, "\n") .. "**", nil, 16762941,
+			(userId and ("<@" .. userId .. "> ") or "") .. "Drop raro: " .. table.concat(list, ", "))
+	end
+
+	-- ------------------------------------------------------------------
+	--  Wave progress. Reads the same "Waves cleared [n / total]" label the
+	--  farm uses and posts one progress embed for every N cleared waves.
+	-- ------------------------------------------------------------------
+	function M.ClearedCount()
+		local n
+		pcall(function()
+			if type(KiraWavesClearedCount) == "function" then
+				n = tonumber(KiraWavesClearedCount())
+			end
+		end)
+		if n then return n end
+		pcall(function()
+			for _, d in ipairs(INTERFACE:GetDescendants()) do
+				if d:IsA("TextLabel") or d:IsA("TextButton") then
+					local text = tostring(d.Text or ""):gsub("<[^>]->", "")
+					text = text:gsub("^%s+", ""):gsub("%s+$", "")
+					if text:lower():match("^waves cleared%s*%[%d+%s*/%s*%d+%]") then
+						local v = text:match("%[(%d+)%s*/")
+						if v then n = tonumber(v) break end
+					end
+				end
+			end
+		end)
+		return n
+	end
+
+	function M.WaveTotal()
+		local total
+		pcall(function()
+			for _, d in ipairs(INTERFACE:GetDescendants()) do
+				if d:IsA("TextLabel") or d:IsA("TextButton") then
+					local text = tostring(d.Text or ""):gsub("<[^>]->", "")
+					if text:lower():match("^waves cleared%s*%[%d+%s*/%s*%d+%]") then
+						local v = text:match("/%s*(%d+)%s*%]")
+						if v then total = tonumber(v) break end
+					end
+				end
+			end
+		end)
+		return total
+	end
+
+	function M.WaveFields(cleared, milestone)
+		local s = M.GetStats()
+		local attrs = workspace:GetAttributes()
+		local total = M.WaveTotal()
+		local fields = {
+			{ name = "Resultado", value = tostring(cleared) .. " ondas limpas", inline = false },
+			{ name = "Modo", value = "Waves", inline = true },
+			{ name = "Dificuldade", value = tostring(attrs.Difficulty or "?"), inline = true },
+			{ name = "Reward Boost", value = attrs.Boosted and "Sim" or "Não", inline = true },
+			{ name = "Level", value = tostring(player:GetAttribute("Level") or "?"), inline = true },
+			{ name = "Ondas limpas", value = tostring(cleared), inline = true },
+			{ name = "Progresso", value = total and (tostring(cleared) .. " / " .. tostring(total)) or tostring(cleared), inline = true },
+			{ name = "Missões na sessão", value = tostring(s.missions or 0), inline = true },
+			{ name = "Tempo de sessão", value = fmtTime(os.time() - (tonumber(s.start) or os.time())), inline = true },
+		}
+		local ok, g = pcall(function() return KiraEngine and KiraEngine.Gold() end)
+		if ok and g then
+			fields[#fields + 1] = { name = "Gold", value = tostring(g), inline = true }
+		end
+		return fields
+	end
+
+	function M.DispatchWave(cleared, milestone)
+		local interval = math.max(1, math.floor(tonumber(O("WebhookWaveInterval", 5)) or 5))
+		local title = "Progresso de Ondas - " .. tostring(milestone or cleared)
+		local desc = "**" .. tostring(cleared) .. " ondas limpas** (enviado a cada "
+			.. tostring(interval) .. " ondas)"
+		local userId = tostring(O("WebhookUserId", "")):match("^%d+$")
+		local mention = userId and ("<@" .. userId .. "> ") or nil
+		return M.Send(title, desc, M.WaveFields(cleared, milestone or cleared), 3447003, mention)
+	end
+
+	function M.WaveTick()
+		if not T("WebhookOn") and not T("WebhookWave") then
+			M._waveLast, M._waveMilestone = nil, nil
+			return
+		end
+		local cleared = M.ClearedCount()
+		if not cleared then return end
+		local interval = math.max(1, math.floor(tonumber(O("WebhookWaveInterval", 5)) or 5))
+		local last = M._waveLast
+		local cur = math.floor(cleared / interval)
+		if not last then
+			-- First sighting seeds the counter so joining a run mid-way does
+			-- not fire a burst of historical progress messages.
+			M._waveLast = cleared
+			M._waveMilestone = cur
+			return
+		end
+		if cleared < last then
+			M._waveLast = cleared
+			M._waveMilestone = cur
+			return
+		end
+		M._waveLast = cleared
+		local prev = M._waveMilestone or 0
+		if cur <= prev then return end
+		M._waveMilestone = cur
+		for m = prev + 1, cur do
+			pcall(M.DispatchWave, cleared, m * interval)
+		end
+	end
+
+	function M.Disconnect(reason)
+		if not T("WebhookOn") or not T("WebhookDisc") then return end
+		M.Send("Desconectado", "Motivo: " .. tostring(reason), nil, 16732240)
+	end
+	M.Rejoin = M.Disconnect
+
+	function M.Test()
+		local ok, err = M.Send("Teste de Webhook", "Conexão verificada.", {
+			{ name = "Player", value = player.Name, inline = true },
+			{ name = "Status", value = getgenv().KiraHub.State.BanStatus or "Unknown", inline = true },
+		}, 10309119)
+		return ok, err
+	end
+
+	function M.TestWave()
+		local cleared = M.ClearedCount() or 5
+		return M.DispatchWave(cleared, cleared)
+	end
+
+	-- ------------------------------------------------------------------
+	--  Reward-screen watcher: 1.5 s of a visible reward panel = one send.
+	-- ------------------------------------------------------------------
+	local function rareCount()
+		local wanted = O("WebhookRare", {})
+		if type(wanted) ~= "table" then return 0 end
+		local n = 0
+		for _, on in pairs(wanted) do if on then n = n + 1 end end
+		return n
+	end
+
+	function M.Tick()
+		pcall(M.WaveTick)
+		local enabled = T("WebhookOn") or T("ToggleRewardWebhook")
+		local rareOn = rareCount() > 0
+		if not enabled or not (T("WebhookMission") or rareOn or T("ToggleRewardWebhook")) then
+			M.sentHere = false
+			M._seenAt = nil
+			return
+		end
+		local r = INTERFACE and INTERFACE:FindFirstChild("Rewards")
+		local visible = r ~= nil and r.Visible == true and #M.RewardTexts() > 0
+		if not visible then
+			M.sentHere = false
+			M._seenAt = nil
+			return
+		end
+		M._seenAt = M._seenAt or os.clock()
+		if M.sentHere or os.clock() - M._seenAt < 1.5 then return end
+		M.sentHere = true
+		pcall(M.DispatchMission, nil)
+	end
+
+	function M.Start()
+		if M._started then return end
+		M._started = true
+		task.spawn(function()
+			while getgenv().KiraHubAOTR do
+				task.wait(1)
+				pcall(M.Tick)
+			end
+		end)
+
+		pcall(function()
+			game:GetService("GuiService").ErrorMessageChanged:Connect(function(msg)
+				if msg and msg ~= "" then pcall(M.Disconnect, msg) end
+			end)
+		end)
+		pcall(function()
+			local promptGui = game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 10)
+			local overlay = promptGui and promptGui:WaitForChild("promptOverlay", 10)
+			if overlay then
+				overlay.ChildAdded:Connect(function(child)
+					if child.Name ~= "ErrorPrompt" then return end
+					task.wait(1)
+					local text = "disconnected"
+					for _, d in ipairs(child:GetDescendants()) do
+						if d:IsA("TextLabel") and #text < #d.Text and d.Name ~= "Title" then
+							text = d.Text
+						end
+					end
+					pcall(M.Disconnect, text)
+				end)
+			end
+		end)
+		pcall(function()
+			TeleportService.TeleportInitFailed:Connect(function(plr, _code, message)
+				if plr == player then pcall(M.Disconnect, "Teleport failed: " .. tostring(message)) end
+			end)
+		end)
+	end
+
+	M.Start()
+	return M
+end)({
+	player = player,
+	HttpService = HttpService,
+	ReplicatedStorage = ReplicatedStorage,
+	INTERFACE = INTERFACE,
+	TeleportService = TeleportService,
+})
 
 function BuildFarmTab(TabRef)
 	local F_Lobby = TabRef:AddLeftGroupbox("Lobby Controls", "component")
@@ -6958,122 +8091,118 @@ function BuildUpgradesTab(TabRef)
 end
 
 function BuildWavesTab(TabRef)
-	local W_Farm = TabRef:AddLeftGroupbox("Waves Farm", "flame")
+	local W_Farm = TabRef:AddLeftGroupbox("Farm", "flame")
 
-	W_Farm:AddToggle("AutoWavesToggle", {Text = "Auto Farm Waves", Default = false})
+	W_Farm:AddToggle("AutoWavesToggle", {
+		Text = "Auto Farm Waves",
+		Default = false,
+		Tooltip = "Farms waves with this switch alone. Auto Farm may stay off."
+	})
 	Toggles.AutoWavesToggle:OnChanged(function()
 		if Toggles.AutoWavesToggle.Value then
-			-- The Waves switch runs the farm by itself; Auto Farm is left
-			-- untouched so waves farming works with Auto Farm on or off.
-			if IsWavesMode() and not AutoFarm._running then AutoFarm:Start() end
+			if IsWavesMode() and not AutoFarm._running then
+				AutoFarm:Start()
+				pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Farming") end)
+			end
 		else
-			-- In a waves map stop the loop only when no other farm switch
-			-- is still on.
 			if IsWavesMode() and not (Toggles.AutoKillToggle.Value or Toggles.AutoFarmRaidsToggle.Value) then
 				if AutoFarm._running then AutoFarm:Stop() end
+				pcall(function() getgenv().KiraHub.UI.Labels.Status:SetText("Status: Idle") end)
 			end
 		end
 		MarkDirty()
 	end)
 
-	W_Farm:AddToggle("AutoStartWavesToggle", {
-		Text = "Auto Start/Vote Waves",
-		Default = false,
-		Tooltip = "Automatically presses vote/start buttons and pings the server"
-	})
-	Toggles.AutoStartWavesToggle:OnChanged(function() MarkDirty() end)
-
-	W_Farm:AddToggle("AutoCollectCrateToggle", {
-		Text = "Auto Collect Skills Crate",
-		Default = false,
-		Tooltip = "Pauses farm, delivers crate to Skills Zone, resumes farm"
-	})
-	Toggles.AutoCollectCrateToggle:OnChanged(function() MarkDirty() end)
-
-	W_Farm:AddToggle("AutoRefillWaveToggle", {
-		Text = "Auto Refill [Wave]",
-		Default = false,
-		Tooltip = "Refills your blades / thunder spears while a wave match is running"
-	})
+	W_Farm:AddToggle("AutoRefillWaveToggle", {Text = "Auto Refill", Default = false})
 	Toggles.AutoRefillWaveToggle:OnChanged(function() MarkDirty() end)
 
-	W_Farm:AddToggle("AutoVoteSkipToggle", {
-		Text = "Auto Vote Skip",
-		Default = false,
-		Tooltip = "Votes to skip the wave intermission automatically"
-	})
-	Toggles.AutoVoteSkipToggle:OnChanged(function() MarkDirty() end)
+	W_Farm:AddToggle("WavesEscapeToggle", {Text = "Auto Escape Grab", Default = false})
+	Toggles.WavesEscapeToggle:OnChanged(function() MarkDirty() end)
 
-	W_Farm:AddToggle("AutoLeaveAtWaveToggle", {
-		Text = "Leave At Wave",
-		Default = false,
-		Tooltip = "Returns to the lobby once Waves Cleared reaches the number below"
-	})
-	Toggles.AutoLeaveAtWaveToggle:OnChanged(function() MarkDirty() end)
+	W_Farm:AddToggle("WavesMultiHitToggle", {Text = "Multi Hit (Waves)", Default = false})
+	Toggles.WavesMultiHitToggle:OnChanged(function() MarkDirty() end)
 
-	W_Farm:AddSlider("LeaveAtWaveSlider", {
-		Text = "Leave After Waves Cleared",
-		Default = 20,
-		Min = 1,
-		Max = 100,
-		Rounding = 0
-	})
-	Options.LeaveAtWaveSlider:OnChanged(function() MarkDirty() end)
+	W_Farm:AddToggle("WavesTitanToggle", {Text = "Titan Form", Default = false})
+	Toggles.WavesTitanToggle:OnChanged(function() MarkDirty() end)
 
-	W_Farm:AddToggle("WaveDieAtToggle", {
+	W_Farm:AddToggle("WavesTitanSkillToggle", {Text = "Titan Form Skill", Default = false})
+	Toggles.WavesTitanSkillToggle:OnChanged(function() MarkDirty() end)
+
+	W_Farm:AddToggle("WavesPrioritizeBossToggle", {Text = "Prioritize Boss (Waves)", Default = false})
+	Toggles.WavesPrioritizeBossToggle:OnChanged(function() MarkDirty() end)
+
+	W_Farm:AddSlider("WavesFarmSpeed", {
+		Text = "Flight speed (Waves)",
+		Default = 280,
+		Min = 100,
+		Max = 500,
+		Tooltip = "Studs per second while farming waves."
+	})
+	Options.WavesFarmSpeed:OnChanged(function() MarkDirty() end)
+
+	W_Farm:AddSlider("WavesHoverHeight", {
+		Text = "Height (Waves)",
+		Default = 200,
+		Min = 50,
+		Max = 500,
+		Tooltip = "Studs above the ground while farming waves."
+	})
+	Options.WavesHoverHeight:OnChanged(function() MarkDirty() end)
+
+	local W_Die = TabRef:AddLeftGroupbox("Die At", "skull")
+	W_Die:AddToggle("WavesDieAtToggle", {
 		Text = "Die At Wave",
 		Default = false,
-		Tooltip = "Kills your character once Waves Cleared reaches the number below"
+		Tooltip = "Ends the run on the chosen wave to collect the rewards."
 	})
-	Toggles.WaveDieAtToggle:OnChanged(function() MarkDirty() end)
+	Toggles.WavesDieAtToggle:OnChanged(function() MarkDirty() end)
 
-	W_Farm:AddSlider("WaveDieAtSlider", {
-		Text = "Die After Waves Cleared",
-		Default = 20,
-		Min = 1,
-		Max = 100,
-		Rounding = 0
+	W_Die:AddInput("WavesDieAtInput", {
+		Text = "Wave to die at",
+		Default = "10",
+		Placeholder = "10"
 	})
-	Options.WaveDieAtSlider:OnChanged(function() MarkDirty() end)
+	Options.WavesDieAtInput:OnChanged(function() MarkDirty() end)
 
-	local W_Up = TabRef:AddRightGroupbox("Waves Upgrades", "hammer")
+	local W_Ondas = TabRef:AddLeftGroupbox("Ondas", "refresh-cw")
+	W_Ondas:AddToggle("AutoStartWavesToggle", {Text = "Auto Ready", Default = false})
+	Toggles.AutoStartWavesToggle:OnChanged(function() MarkDirty() end)
 
-	W_Up:AddToggle("AutoWavesUpgradeToggle", {
-		Text = "Auto Upgrade Wave Gear",
-		Default = false,
-		Tooltip = "Loops through all wave-mode gear upgrades using wave gold"
+	W_Ondas:AddToggle("AutoVoteSkipToggle", {Text = "Auto Skip (next wave)", Default = false})
+	Toggles.AutoVoteSkipToggle:OnChanged(function() MarkDirty() end)
+
+	W_Ondas:AddToggle("AutoCollectCrateToggle", {Text = "Auto Crate", Default = false})
+	Toggles.AutoCollectCrateToggle:OnChanged(function() MarkDirty() end)
+
+	local W_Skill = TabRef:AddLeftGroupbox("Skills & Equipment", "zap")
+	W_Skill:AddToggle("WavesAutoSkillToggle", {Text = "Auto Skill", Default = false})
+	Toggles.WavesAutoSkillToggle:OnChanged(function() MarkDirty() end)
+
+	W_Skill:AddToggle("WavesSkillBossToggle", {Text = "Auto Skill On Boss", Default = false})
+	Toggles.WavesSkillBossToggle:OnChanged(function() MarkDirty() end)
+
+	W_Skill:AddToggle("WavesGroundSkillsToggle", {
+		Text = "Ground skills (go down, use, come back)",
+		Default = true
 	})
+	Toggles.WavesGroundSkillsToggle:OnChanged(function() MarkDirty() end)
+
+	W_Skill:AddToggle("WavesAutoEquip", {Text = "Auto Equip Best", Default = false})
+	Toggles.WavesAutoEquip:OnChanged(function() MarkDirty() end)
+
+	W_Skill:AddButton({Text = "Equipment (open Lulu menu)", Func = function()
+		pcall(function() KiraEngine.OpenNpc("Lulu", "equipment", "^%[?e%]?%s*equipment$") end)
+	end})
+
+	local W_Up = TabRef:AddRightGroupbox("Upgrades", "hammer")
+	W_Up:AddToggle("AutoWavesUpgradeToggle", {Text = "Auto Upgrade Waves Gear", Default = false})
 	Toggles.AutoWavesUpgradeToggle:OnChanged(function() MarkDirty() end)
 
-	W_Up:AddToggle("AutoBuyBaseUpgradesToggle", {
-		Text = "Auto Buy Base Upgrades",
-		Default = false,
-		Tooltip = "Buys selected HQ base upgrades using wave gold"
-	})
-	Toggles.AutoBuyBaseUpgradesToggle:OnChanged(function() MarkDirty() end)
-
-	W_Up:AddDropdown("BaseUpgradesSelectDropdown", {
-		Values = getgenv().KiraHub.Data.BaseUpgradeNames,
-		Default = {},
-		Multi = true,
-		Text = "Select Upgrades"
-	})
-
-	W_Up:AddToggle("AutoBuyTSWavesToggle", {
-		Text = "Auto Buy Thunder Spears",
-		Default = false,
-		Tooltip = "Auto-buys Thunder Spears from the wave vendor when out of ammo"
-	})
-	Toggles.AutoBuyTSWavesToggle:OnChanged(function() MarkDirty() end)
-
-	W_Up:AddToggle("AutoRollBlessingToggle", {
-		Text = "Auto Roll Blessing",
-		Default = false,
-		Tooltip = "Auto rolls blessings using wave tokens"
-	})
+	W_Up:AddToggle("AutoRollBlessingToggle", {Text = "Auto Roll (Blessings)", Default = false})
 	Toggles.AutoRollBlessingToggle:OnChanged(function() MarkDirty() end)
+
 	W_Up:AddSlider("GoldReserveSlider", {
-		Text = "Gold Reserve",
+		Text = "Keep Gold",
 		Default = 5000,
 		Min = 0,
 		Max = 100000000,
@@ -7082,12 +8211,81 @@ function BuildWavesTab(TabRef)
 	})
 	Options.GoldReserveSlider:OnChanged(function() MarkDirty() end)
 
-	W_Up:AddToggle("AutoShopWavesToggle", {
-		Text = "Auto Shop Wave Upgrades",
-		Default = false,
-		Tooltip = "Repeatedly buys available wave shop upgrades"
+	W_Up:AddToggle("WavesAutoRollPickToggle", {Text = "Auto Roll (selected)", Default = false})
+	Toggles.WavesAutoRollPickToggle:OnChanged(function() MarkDirty() end)
+
+	W_Up:AddDropdown("WavesBlessingDropdown", {
+		Text = "Wanted blessings",
+		Values = KiraWaves.Blessings,
+		Default = {},
+		Multi = true,
+		Search = true
 	})
-	Toggles.AutoShopWavesToggle:OnChanged(function() MarkDirty() end)
+	Options.WavesBlessingDropdown:OnChanged(function() MarkDirty() end)
+
+	local W_Prio = TabRef:AddRightGroupbox("Gold Priority", "coins")
+	for i = 1, 5 do
+		W_Prio:AddDropdown("WavesPrio" .. i, {
+			Text = "Priority " .. i,
+			Values = KiraWaves.Prio,
+			Default = "Nenhum",
+			Multi = false
+		})
+		Options["WavesPrio" .. i]:OnChanged(function() MarkDirty() end)
+	end
+
+	local W_Orange = TabRef:AddRightGroupbox("Orange Ackerman (Shop)", "shopping-cart")
+	W_Orange:AddToggle("WavesOrangeAll", {Text = "Orange: Upgrade All", Default = false})
+	Toggles.WavesOrangeAll:OnChanged(function() MarkDirty() end)
+
+	W_Orange:AddToggle("WavesOrangeSelected", {Text = "Orange: Upgrade Selected", Default = false})
+	Toggles.WavesOrangeSelected:OnChanged(function() MarkDirty() end)
+
+	W_Orange:AddDropdown("OrangePick", {
+		Text = "Selected items",
+		Values = KiraWaves.OrangeOptions,
+		Default = {},
+		Multi = true
+	})
+	Options.OrangePick:OnChanged(function() MarkDirty() end)
+
+	W_Orange:AddButton({Text = "Open Shop (Orange)", Func = function()
+		pcall(function() KiraWaves.OpenShop("orange") end)
+	end})
+
+	W_Orange:AddButton({Text = "Refresh (Orange)", Func = function()
+		pcall(KiraWaves.RefreshShop)
+	end})
+
+	getgenv().KiraHub.UI.Labels.OrangeStock = W_Orange:AddLabel("Current stock (changes every wave)")
+
+	local W_Cole = TabRef:AddRightGroupbox("Cole Yeager (Base)", "hammer")
+	W_Cole:AddToggle("WavesColeAll", {Text = "Cole: Upgrade All", Default = false})
+	Toggles.WavesColeAll:OnChanged(function() MarkDirty() end)
+
+	W_Cole:AddToggle("ColeSelected", {Text = "Cole: Upgrade Selected", Default = false})
+	Toggles.ColeSelected:OnChanged(function() MarkDirty() end)
+
+	W_Cole:AddDropdown("ColePick", {
+		Text = "Selected upgrades",
+		Values = getgenv().KiraHub.Data.BaseUpgradeNames,
+		Default = {},
+		Multi = true
+	})
+	Options.ColePick:OnChanged(function() MarkDirty() end)
+
+	W_Cole:AddButton({Text = "Open Shop (Cole)", Func = function()
+		pcall(function() KiraWaves.OpenShop("cole") end)
+	end})
+
+	W_Cole:AddButton({Text = "Refresh (Cole)", Func = function()
+		pcall(KiraWaves.RefreshCole)
+	end})
+
+	getgenv().KiraHub.UI.Labels.ColeStock = W_Cole:AddLabel("Base upgrades")
+
+	-- Starts the Die At / shop / gold-priority workers once Options exist.
+	task.spawn(function() pcall(function() KiraWaves.Start() end) end)
 end
 
 function BuildThunderSpearTab(TabRef)
@@ -7668,28 +8866,60 @@ function BuildWebhooksTab(TabRef)
 	Toggles.ToggleSkinHunterWebhook:OnChanged(function() MarkDirty() end)
 
 	WH_Events:AddButton({Text = "Dispatch Test Webhook", Func = function()
-		local url = GetWebhookURL()
-		if url == "" then
-			Library:Notify({Title = "Webhook", Description = "Enter a URL first", Time = 3})
-			return
-		end
-		local banStatus = getgenv().KiraHub.State.BanStatus or "Unknown"
-		local statusColor = 3066993
-		if banStatus == "Banned" or banStatus == "Flagged" then statusColor = 15158332 end
-		PostWebhook(url, {
-			embeds = {{
-				title = "Kira Hub Premium | Test Webhook",
-				description = "Secure communication link verified.\n**Premium Edition v3**",
-				color = statusColor,
-				fields = {
-					{name = "Player", value = player.Name, inline = true},
-					{name = "Ban Status", value = banStatus, inline = true}
-				},
-				footer = {text = "Kira Hub Premium v3"},
-				timestamp = DateTime.now():ToIsoDate()
-			}}
-		})
-		Library:Notify({Title = "Webhook", Description = "Test dispatched", Time = 3})
+		local ok, err = KiraWebhook.Test()
+		Library:Notify({Title = "Webhook", Description = ok and "Test dispatched" or tostring(err), Time = 4})
+	end})
+
+	local WH_Ref = TabRef:AddLeftGroupbox("Webhook Events", "send")
+	WH_Ref:AddToggle("WebhookOn", {Text = "Webhook On", Default = false})
+	Toggles.WebhookOn:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddToggle("WebhookMission", {Text = "Mission Webhook", Default = true})
+	Toggles.WebhookMission:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddToggle("WebhookWave", {Text = "Wave Progress Webhook", Default = true,
+		Tooltip = "Sends a progress embed every N cleared waves."})
+	Toggles.WebhookWave:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddInput("WebhookWaveInterval", {
+		Text = "Waves per update",
+		Default = "5",
+		Placeholder = "5"
+	})
+	Options.WebhookWaveInterval:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddToggle("WebhookDisc", {Text = "Disconnect Webhook", Default = false})
+	Toggles.WebhookDisc:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddDropdown("WebhookRare", {
+		Text = "Rare Drop Alerts",
+		Values = KiraWebhook.RARITIES,
+		Default = {},
+		Multi = true,
+		Tooltip = "Sends DROP RARO! when one of these rarities appears in the reward screen."
+	})
+	Options.WebhookRare:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddInput("WebhookUserId", {
+		Text = "Ping User ID",
+		Default = "",
+		Placeholder = "Discord user ID (optional)"
+	})
+	Options.WebhookUserId:OnChanged(function() MarkDirty() end)
+
+	WH_Ref:AddButton({Text = "Test Webhook", Func = function()
+		local ok, err = KiraWebhook.Test()
+		Library:Notify({Title = "Webhook", Description = ok and "Test dispatched" or tostring(err), Time = 4})
+	end})
+
+	WH_Ref:AddButton({Text = "Test Wave Progress", Func = function()
+		local ok, err = KiraWebhook.TestWave()
+		Library:Notify({Title = "Webhook", Description = ok and "Wave progress dispatched" or tostring(err), Time = 4})
+	end})
+
+	WH_Ref:AddButton({Text = "Reset Session Stats", Func = function()
+		KiraWebhook.ResetStats()
+		Library:Notify({Title = "Webhook", Description = "Session stats reset", Time = 3})
 	end})
 end
 
@@ -8923,100 +10153,14 @@ function ScrapeMissionRewards()
 end
 
 function DispatchMissionWebhook(data)
-	local url = getgenv().KiraHub.Webhooks.GetRewards()
-	if url == "" then return end
-
-	local hasSpecial = false
-	if data.Special then
-		for specialName in pairs(data.Special) do
-			if not string.lower(tostring(specialName)):find("pumpkin", 1, true) then
-				hasSpecial = true
-				break
-			end
-		end
-	end
-	local displayName = IsToggled("RewardsShowUsernameToggle") and player.Name or "Anonymous [ Premium User ]"
-	
-	local exec = "Unknown"
-	pcall(function() exec = identifyexecutor and identifyexecutor() or "Unknown" end)
-	
-	local missionMap = (mapData and mapData.Map and mapData.Map.Name) or "Unknown"
-	local missionDiff = (mapData and mapData.Map and mapData.Map.Difficulty) or "Unknown"
-	local missionObj = (mapData and mapData.Map and mapData.Map.Objective) or "Unknown"
-	local missionType = (mapData and mapData.Map and mapData.Map.Type) or "Missions"
-	
-	local liveBan = getgenv().KiraHub.State.BanStatus or "Unknown"
-	local statusColor = 3066993
-	if liveBan == "Banned" or liveBan == "Flagged" then statusColor = 15158332 end
-	if hasSpecial then statusColor = 16711680 end
-
-	getgenv().KiraHub.Webhooks.Post(url, {
-		content = hasSpecial and "@everyone PREMIUM MYTHICAL DROP!" or nil,
-		embeds = {{
-			title = "Kira Hub Premium | Mission Cleared",
-			description = "**Mission:** " .. missionObj .. " [" .. missionDiff .. "]\n**Player:** " .. displayName,
-			color = statusColor,
-			fields = {
-				{
-					name = "Mission Details",
-					value = "• Map: " .. missionMap .. "\n• Difficulty: " .. missionDiff .. "\n• Objective: " .. missionObj .. "\n• Type: " .. missionType .. "\n• Outcome: COMPLETED",
-					inline = false
-				},
-				{
-					name = "Combat Stats",
-					value = FormatStatsTable(data.Stats),
-					inline = false
-				},
-				{
-					name = "Items Earned",
-					value = FormatItemsTable(data.Items),
-					inline = false
-				},
-				{
-					name = "Special Drops",
-					value = FormatItemsTable(data.Special),
-					inline = false
-				},
-				{
-					name = "Account Info",
-					value = "• Level: " .. tostring(data.Total.Level or "1") .. " | Prestige: " .. tostring(data.Total.Prestige or "0") .. "\n• Gold: " .. tostring(data.Total.Gold or "0") .. " | Gems: " .. tostring(data.Total.Gems or "0") .. "\n• Pumpkin Tokens: " .. tostring(data.Total.Pumpkins or (data.Items and data.Items["Pumpkin Tokens"]) or "0") .. "\n• Streak: " .. tostring(data.Total.Streak or "N/A") .. "\n• Games Played: " .. tostring(getgenv().KiraHub.State.GamesPlayed) .. "\n• Ban Status: " .. liveBan .. "\n• Executor: " .. exec,
-					inline = false
-				}
-			},
-			footer = {text = "Kira Hub Premium v3 | Elite Edition"},
-			timestamp = DateTime.now():ToIsoDate()
-		}}
-	})
+	pcall(KiraWebhook.DispatchMission, data)
 end
-
 function DispatchMythicalWebhook(itemName, qty)
-	local url = getgenv().KiraHub.Webhooks.GetRewards()
-	if url == "" then return end
-	if not IsToggled("ToggleMythicalFamilyWebhook") then return end
-	-- Pumpkin Tokens are normal event currency, not mythical.
-	if string.lower(tostring(itemName or "")):find("pumpkin", 1, true) then return end
-	
-	local liveBan = getgenv().KiraHub.State.BanStatus or "Unknown"
+	if not (IsToggled("WebhookOn") or IsToggled("ToggleMythicalFamilyWebhook")) then return end
+	if tostring(itemName or ""):lower():find("pumpkin", 1, true) then return end
 	local cleanName = CleanRewardName(itemName)
-	
-	getgenv().KiraHub.Webhooks.Post(url, {
-		content = "MYTHICAL DROP DETECTED!",
-		embeds = {{
-			title = "Kira Hub Premium | Mythical Drop",
-			description = "**A Mythical item has been acquired!**",
-			color = 16711680,
-			fields = {
-				{name = "Player", value = player.Name, inline = true},
-				{name = "Reward", value = cleanName, inline = true},
-				{name = "Quantity", value = "x" .. tostring(qty), inline = true},
-				{name = "Ban Status", value = liveBan, inline = false}
-			},
-			footer = {text = "Kira Hub Premium | Mythical Tracker"},
-			timestamp = DateTime.now():ToIsoDate()
-		}}
-	})
+	pcall(KiraWebhook.DispatchRare, { [cleanName] = "Mythic" })
 end
-
 getgenv().KiraHub.DispatchSkinHunter = function(skinName, bossName)
 	local url = getgenv().KiraHub.Webhooks.GetRewards()
 	if url == "" then return end
@@ -10722,36 +11866,8 @@ function HandleWavesTSBuy()
 end
 
 function HandleWavesBaseUpgrades()
-	if not IsToggled("AutoBuyBaseUpgradesToggle") or not IsWavesMode() then return end
-	if KiraEngine and KiraEngine.EngineOn() then return end
-	local whitelist = GetOption("BaseUpgradesSelectDropdown", {})
-	local state = getgenv().KiraHub.State
-	state.BaseUpgradeRetryAt = state.BaseUpgradeRetryAt or {}
-	state.BaseUpgradeCursor = state.BaseUpgradeCursor or 1
-	local names = getgenv().KiraHub.Data.BaseUpgradeNames or {}
-	if #names == 0 then return end
-	local now = os.clock()
-	for offset = 0, #names - 1 do
-		local index = ((state.BaseUpgradeCursor + offset - 1) % #names) + 1
-		local upg = names[index]
-		if whitelist[upg] and now >= (state.BaseUpgradeRetryAt[upg] or 0) then
-			state.BaseUpgradeCursor = (index % #names) + 1
-			local ok, result = pcall(function()
-				return getRemote:InvokeServer("Waves", "Upgrade", {upg})
-			end)
-			-- Rotate through upgrades even on failures; a failed purchase is retried
-			-- after a cooldown instead of blocking all later upgrades.
-			state.BaseUpgradeRetryAt[upg] = os.clock() + (ok and 2.5 or 5)
-			if not ok then
-				pcall(function()
-					Library:Notify({Title = "Wave Upgrade", Description = "Retrying " .. tostring(upg) .. " after a request error.", Time = 3})
-				end)
-			end
-			return
-		end
-	end
+	-- Replaced by KiraWaves.ColeShop (Cole Yeager panel).
 end
-
 function HandleWavesBlessing()
 	if not IsToggled("AutoRollBlessingToggle") then return end
 	if not IsWavesMode() then return end
@@ -10779,26 +11895,8 @@ function HandleAutoStartWaves()
 end
 
 function HandleAutoWavesUpgrade()
-	if not IsToggled("AutoShopWavesToggle") then return end
-	-- The old stat-upgrade remote is gone: Auto Shop now uses the same
-	-- Smooth Hub Lulu flow as Auto Upgrade Wave Gear.
-	if KiraEngine and KiraEngine.EngineOn() then return end
-	if not IsWavesMode() then return end
-	
-	local upgrades = {
-		"ODM_Damage","ODM_Control","ODM_Gas","ODM_Speed","Blade_Durability","ODM_Range",
-		"Blast_Radius","TS_Control","TS_Range","TS_Damage","TS_Gas","TS_Speed","Crit_Damage","Crit_Chance"
-	}
-	
-	for _, upg in ipairs(upgrades) do
-		if not IsToggled("AutoShopWavesToggle") then break end
-		pcall(function()
-			getRemote:InvokeServer("Equipment", "Upgrade", {upg})
-		end)
-		task.wait(0.3)
-	end
+	-- Replaced by KiraEngine.WavesGear (Lulu UPGRADE ALL).
 end
-
 function HandleAutoCollectCrate()
 	if not IsToggled("AutoCollectCrateToggle") then return end
 	if not IsWavesMode() then return end
@@ -10936,9 +12034,10 @@ task.spawn(function()
 		if not getgenv().KiraHubAOTR then break end
 		if IsWavesMode() then
 			pcall(KiraEngine.WavesTick)
+			pcall(KiraWaves.Tick)
 			pcall(HandleWavesTSBuy)
 			pcall(HandleWavesBaseUpgrades)
-			pcall(HandleWavesBlessing)
+			pcall(KiraWaves.BlessingTick)
 			pcall(HandleWaveDieAt)
 			pcall(HandleAutoWavesUpgrade)
 			pcall(HandleAutoCollectCrate)
