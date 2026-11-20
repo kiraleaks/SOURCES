@@ -5405,8 +5405,9 @@ KiraEngine = (function(Ctx)
 	-- Shared by the main upgrade toggles and Gold Priority. WavesTick passes
 	-- fromTick=true because it already reserved this wave; every other caller
 	-- is checked and deduplicated here.
-	local function upDue(kind, fromTick)
+	local function upDue(kind, fromTick, force)
 		local wave = upWaveGate()
+		if force then return true, wave end
 		if os.clock() - UP.clearAt > UP_GRACE then return false, "window" end
 		if type(wave) == "number" and (wave < UP_EVERY or wave % UP_EVERY ~= 0) then
 			return false, "wave"
@@ -5431,7 +5432,9 @@ KiraEngine = (function(Ctx)
 
 	local function upGoldFor(stats)
 		local v = stats and tonumber(stats.Gold)
-		if v then return v end
+		-- Stats.Get can return a stale 0 on some executors; prefer a real HUD
+		-- reading in that case instead of silently blocking every purchase.
+		if v and v > 0 then return v end
 		return upGold()
 	end
 
@@ -5482,10 +5485,12 @@ KiraEngine = (function(Ctx)
 		return "wait"
 	end
 
-	function M.WavesGear(only, fromTick)
-		if UP.bladeBusy or S.Refilling then return false end
+	function M.WavesGear(only, fromTick, force)
+		-- Remote purchases never move the character, so an active refill must
+		-- not suppress them.
+		if UP.bladeBusy then return false end
 		if not IsWavesMode() then return false end
-		local due, why = upDue("gear", fromTick)
+		local due, why = upDue("gear", fromTick, force)
 		if not due then UP.note = "Waiting: " .. tostring(why) return false, why end
 		UP.bladeBusy = true
 		S.Upgrading = true
@@ -5592,10 +5597,12 @@ KiraEngine = (function(Ctx)
 		return ok
 	end
 
-	function M.WavesBase(only, fromTick)
-		if UP.charBusy or S.Refilling then return false end
+	function M.WavesBase(only, fromTick, force)
+		-- Remote purchases never move the character, so an active refill must
+		-- not suppress them.
+		if UP.charBusy then return false end
 		if not IsWavesMode() then return false end
-		local due, why = upDue("base", fromTick)
+		local due, why = upDue("base", fromTick, force)
 		if not due then UP.note = "Waiting: " .. tostring(why) return false, why end
 		-- "Selected upgrades" narrows the list; an empty list buys everything.
 		local picked = M.Option("ColePick", {})
@@ -5604,11 +5611,8 @@ KiraEngine = (function(Ctx)
 		local wavesFolder = workspace:FindFirstChild("Waves")
 		local upgradesFolder = wavesFolder and wavesFolder:FindFirstChild("Upgrades")
 		if not upgradesFolder then upWarn("Waves Upgrades folder not found") return false end
-		local gold = upGold()
-		if gold and gold <= upReserve() then
-			UP.note = "Gold reserve"
-			return false, "reserve"
-		end
+		-- v1 only looked at the live Cost attribute and let the server reject
+		-- unaffordable purchases. Keep that exact behaviour for base upgrades.
 		UP.charBusy = true
 		S.Upgrading = true
 		local ok, err = pcall(function()
@@ -5618,23 +5622,18 @@ KiraEngine = (function(Ctx)
 					local f = upgradesFolder:FindFirstChild(name)
 					local cost = f and tonumber(f:GetAttribute("Cost")) or 0
 					if cost > 0 then
-						local have = upGold()
-						if have and (have - upReserve()) < cost then
-							noGold[#noGold + 1] = name
+						local sent, res = pcall(function()
+							return getRemote:InvokeServer("Waves", "Upgrade", { name })
+						end)
+						if sent and res ~= nil then
+							bought = bought + 1
+							UP.note = ("Base %s upgraded"):format(name)
+							getgenv().KiraHub.State.UpgradeNote = UP.note
+							goldCacheAt = 0
+							statsCache, statsAt = nil, 0
+							task.wait(0.3)
 						else
-							local sent, res = pcall(function()
-								return getRemote:InvokeServer("Waves", "Upgrade", { name })
-							end)
-							if sent and res ~= nil then
-								bought = bought + 1
-								UP.note = ("Base %s upgraded"):format(name)
-								getgenv().KiraHub.State.UpgradeNote = UP.note
-								goldCacheAt = 0
-								statsCache, statsAt = nil, 0
-								task.wait(0.3)
-							else
-								noGold[#noGold + 1] = name
-							end
+							noGold[#noGold + 1] = name
 						end
 					end
 				end
@@ -5660,7 +5659,7 @@ KiraEngine = (function(Ctx)
 		-- Track the clear time even while a refill/trip is busy, so the grace
 		-- window is measured from the actual wave change.
 		local wave = upWaveGate()
-		if S.Refilling or UP.charBusy or UP.bladeBusy then return end
+		if UP.charBusy or UP.bladeBusy then return end
 		-- Only act inside the grace window right after the wave was cleared.
 		if os.clock() - UP.clearAt > UP_GRACE then return end
 		-- Upgrades run on every 2nd cleared wave. When the HUD counter cannot
@@ -8343,6 +8342,14 @@ function BuildWavesTab(TabRef)
 		Search = true
 	})
 	Options.WavesBlessingDropdown:OnChanged(function() MarkDirty() end)
+
+	W_Up:AddButton({Text = "Upgrade Now (Test)", Func = function()
+		task.spawn(function()
+			pcall(function() KiraEngine.WavesGear(nil, false, true) end)
+			pcall(function() KiraEngine.WavesBase(nil, false, true) end)
+			Library:Notify({Title = "Upgrade", Description = "Upgrade remotes fired", Time = 3})
+		end)
+	end})
 
 	local W_Prio = TabRef:AddRightGroupbox("Gold Priority", "coins")
 	for i = 1, 5 do
