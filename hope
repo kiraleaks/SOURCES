@@ -2083,10 +2083,14 @@ function AutoFarm:Start()
 				if not rs then
 					getgenv().KiraHub.State.RefillSince = os.clock()
 				elseif os.clock() - rs > 20 then
-					getgenv().KiraHub.State.Refilling = false
-					getgenv().KiraHub.State.RefillSince = nil
-					local rc = getgenv().KiraHub.Refill
-					if rc then rc.Refilling = false end
+					local active = false
+					pcall(function() active = KiraEngine and KiraEngine.RefillActive() end)
+					if not active then
+						getgenv().KiraHub.State.Refilling = false
+						getgenv().KiraHub.State.RefillSince = nil
+						local rc = getgenv().KiraHub.Refill
+						if rc then rc.Refilling = false end
+					end
 				end
 				local c = player.Character
 				local r = c and c:FindFirstChild("HumanoidRootPart")
@@ -2668,8 +2672,8 @@ function AutoFarm:Start()
 		pcall(function()
 			if KiraEngine then
 				KiraEngine.RestoreCollide()
-				KiraEngine.State.Paused = false
-				KiraEngine.State.Refilling = false
+				-- The engine owns these flags; never clear a live refill/upgrade.
+				KiraEngine.SyncFarmState()
 			end
 		end)
 		end)
@@ -2698,8 +2702,8 @@ function AutoFarm:Stop()
 	pcall(function()
 		if KiraEngine then
 			KiraEngine.RestoreCollide()
-			KiraEngine.State.Paused = false
-			KiraEngine.State.Refilling = false
+			-- The engine owns these flags; never clear a live refill/upgrade.
+			KiraEngine.SyncFarmState()
 		end
 	end)
 end
@@ -3433,6 +3437,74 @@ KiraEngine = (function(Ctx)
 	}
 	M.State = S
 
+	-- ------------------------------------------------------------------
+	--  Character arbitration.
+	--  Refills, wave-upgrade NPC trips, the cannon and the titan shift all
+	--  write the HumanoidRootPart CFrame. Two owners at once means HoldAt
+	--  fights the other writer and the loser silently fails - that is what
+	--  made upgrades "do nothing" while a refill was running. One owner at a
+	--  time: refills yield to upgrades, upgrades wait for an active refill.
+	-- ------------------------------------------------------------------
+	S.CharOwner = nil
+	S.CharPending = nil
+	S.PauseOwners = {}
+	S.PendingUpgrade = nil
+
+	function M.CharBusy() return S.CharOwner end
+	function M.RefillActive()
+		return S.Refilling == true or S.CharOwner == "refill"
+	end
+	function M.UpgradeActive()
+		return S.Upgrading == true or S.CharPending == "upgrade"
+			or S.PendingUpgrade ~= nil
+	end
+
+	function M.HoldCharacter(owner, timeout)
+		if S.CharOwner == owner then return true end
+		-- Refill / cannon / titan never queue. They yield to a waiting upgrade
+		-- so the upgrade cannot be starved by continuous refill requests.
+		if (timeout or 0) <= 0 and S.CharPending == "upgrade" then return false end
+		if S.CharPending == nil or owner == "upgrade" then S.CharPending = owner end
+		local deadline = os.clock() + (timeout or 0)
+		while S.CharOwner and S.CharOwner ~= owner and os.clock() < deadline do
+			if S.CharPending ~= owner then return false end
+			task.wait(0.1)
+		end
+		if S.CharOwner and S.CharOwner ~= owner then
+			if S.CharPending == owner then S.CharPending = nil end
+			return false
+		end
+		if S.CharPending == owner then S.CharPending = nil end
+		S.CharOwner = owner
+		return true
+	end
+
+	function M.ReleaseCharacter(owner)
+		if S.CharOwner == owner then S.CharOwner = nil end
+		if S.CharPending == owner then S.CharPending = nil end
+	end
+
+	function M.SetPause(owner, on)
+		S.PauseOwners[owner] = on and os.clock() or nil
+		S.Paused = next(S.PauseOwners) ~= nil
+		if not S.Paused then S.PausedAt = nil end
+	end
+
+	function M.OtherPause(owner)
+		for k in pairs(S.PauseOwners) do
+			if k ~= owner then return true end
+		end
+		return false
+	end
+
+	-- AutoFarm:Stop() used to clear these flags blindly while a refill was
+	-- still moving the character. The engine owns them: mirror the truth
+	-- outward instead of letting the farm reset an in-flight trip.
+	function M.SyncFarmState()
+		getgenv().KiraHub.State.Refilling = S.Refilling == true
+		getgenv().KiraHub.State.Upgrading = S.Upgrading == true
+	end
+
 	M.SAFE = {
 		Height = 105,
 		Speed = 220,
@@ -3800,7 +3872,8 @@ KiraEngine = (function(Ctx)
 			return false
 		end
 
-		S.Paused = true
+		if not M.HoldCharacter("cannon", 0) then return false end
+		M.SetPause("cannon", true)
 		-- Teleport onto the cannon before firing (phase 1). The shot is fired
 		-- through the tagged model, so the character has to be on it; the farm
 		-- loop resumes fighting the adds as soon as this returns.
@@ -3861,7 +3934,8 @@ KiraEngine = (function(Ctx)
 				})
 			end)
 		end)
-		S.Paused = false
+		M.SetPause("cannon", false)
+		M.ReleaseCharacter("cannon")
 		return hit
 	end
 
@@ -4611,6 +4685,9 @@ KiraEngine = (function(Ctx)
 	function M.RefillOnce(count)
 		if not M.RefillOn() then return false end
 		if S.Refilling then return false end
+		-- Upgrades own the character when they are running or queued. A refill
+		-- may never displace them; it simply skips this cycle and retries.
+		if M.UpgradeActive() then return false end
 		-- Colossal phase 1: the cannon owns the trip. Never walk away from a
 		-- loaded cannon.
 		if M.ColossalPhase1() and M.CannonReadyNow() then return false end
@@ -4621,16 +4698,25 @@ KiraEngine = (function(Ctx)
 		S.Refilling = true
 		S.RefillSince = os.clock()
 		getgenv().KiraHub.State.Refilling = true
+		-- One character owner at a time. timeout=0: never wait here, so an
+		-- attack never stalls behind a queued upgrade.
+		if not M.HoldCharacter("refill", 0) then
+			S.Refilling = false
+			getgenv().KiraHub.State.Refilling = false
+			return false
+		end
 		local waitAt = os.clock()
-		while S.Paused and os.clock() - waitAt < 6 do task.wait(0.1) end
+		while M.OtherPause("refill") and os.clock() - waitAt < 6 do task.wait(0.1) end
 		local _, root2 = M.Char()
 		if not root2 then
+			M.SetPause("refill", false)
+			M.ReleaseCharacter("refill")
 			S.Refilling = false
 			getgenv().KiraHub.State.Refilling = false
 			return false
 		end
 		local hold = root2.CFrame
-		S.Paused = true
+		M.SetPause("refill", true)
 		local ok, done, station, before, aborted = pcall(M.DoRefill, count or total)
 		if not ok then note("Refill error: " .. tostring(done)) end
 		if not ok or not station then
@@ -4641,7 +4727,8 @@ KiraEngine = (function(Ctx)
 				r.AssemblyLinearVelocity = Vector3.zero
 			end
 			S.HoldCF = hold
-			S.Paused = false
+			M.SetPause("refill", false)
+			M.ReleaseCharacter("refill")
 			S.Refilling = false
 			getgenv().KiraHub.State.Refilling = false
 			return false
@@ -4656,7 +4743,8 @@ KiraEngine = (function(Ctx)
 				ra.AssemblyLinearVelocity = Vector3.zero
 			end
 			S.HoldCF = hold
-			S.Paused = false
+			M.SetPause("refill", false)
+			M.ReleaseCharacter("refill")
 			S.Refilling = false
 			getgenv().KiraHub.State.Refilling = false
 			return false
@@ -4686,7 +4774,8 @@ KiraEngine = (function(Ctx)
 			r2.AssemblyLinearVelocity = Vector3.zero
 		end
 		S.HoldCF = hold
-		S.Paused = false
+		M.SetPause("refill", false)
+		M.ReleaseCharacter("refill")
 		S.Refilling = false
 		getgenv().KiraHub.State.Refilling = false
 		return done == true
@@ -4722,8 +4811,10 @@ KiraEngine = (function(Ctx)
 		local total = M.RefillsTotal()
 		local known = M.RefillsKnown()
 		local state
-		if S.Refilling then
-			state = S.Upgrading and "Upgrading" or (S.RefillNote or "Refilling")
+		if S.Upgrading or S.PendingUpgrade then
+			state = S.PendingUpgrade and "Upgrade queued" or "Upgrading"
+		elseif S.Refilling then
+			state = S.RefillNote or "Refilling"
 		elseif not M.RefillOn() then
 			state = "Off"
 		elseif total <= 0 and not (M.WaveFolder() and not known) then
@@ -4758,7 +4849,8 @@ KiraEngine = (function(Ctx)
 		local _, root = M.Char()
 		if not root then return end
 		local hold = root.CFrame
-		S.Paused = true
+		if not M.HoldCharacter("titan", 0) then return end
+		M.SetPause("titan", true)
 		local t0 = now
 		local ok = false
 		while os.clock() - t0 < 9 do
@@ -4771,7 +4863,8 @@ KiraEngine = (function(Ctx)
 			end
 			task.wait(0.25)
 		end
-		S.Paused = false
+		M.SetPause("titan", false)
+		M.ReleaseCharacter("titan")
 		S.HoldCF = nil
 		S.TitanNext = os.clock() + (ok and 2 or 10)
 		if ok then note("Titan form active") end
@@ -5477,6 +5570,7 @@ KiraEngine = (function(Ctx)
 		if not due then UP.note = "Waiting: " .. tostring(why) return false, why end
 		UP.bladeBusy = true
 		S.Upgrading = true
+		getgenv().KiraHub.State.Upgrading = true
 		local ok, err = pcall(function()
 			local stats = M.StatsFresh()
 			if not stats then error("Stats.Get unavailable", 0) end
@@ -5532,6 +5626,7 @@ KiraEngine = (function(Ctx)
 			getgenv().KiraHub.State.UpgradeNote = UP.note
 		end)
 		S.Upgrading = false
+		getgenv().KiraHub.State.Upgrading = false
 		UP.bladeBusy = false
 		if not ok then
 			upWarn("Error: " .. tostring(err))
@@ -5560,19 +5655,36 @@ KiraEngine = (function(Ctx)
 			upWarn(name .. " not found")
 			return false
 		end
+		-- This is an UPGRADE trip, not a refill. It waits for an active refill
+		-- to release the character (and has priority over refills that start
+		-- while it is queued) instead of sharing the refill's busy flag.
+		if not M.HoldCharacter("upgrade", 20) then
+			upWarn(name .. " busy: character in use")
+			return false
+		end
+		M.SetPause("upgrade", true)
+		S.Upgrading = true
+		getgenv().KiraHub.State.Upgrading = true
 		local wasFarm = AutoFarm and AutoFarm._running
 		if AutoFarm then
 			AutoFarm._holdUntil = os.clock() + 120
 			if wasFarm then pcall(function() AutoFarm:Stop() end) end
+			-- AutoFarm:Stop must not clear a live refill; re-mirror the truth.
+			pcall(M.SyncFarmState)
+			S.Upgrading = true
+			getgenv().KiraHub.State.Upgrading = true
+			M.SetPause("upgrade", true)
 		end
-		S.Refilling = true
 		local ok = pcall(function()
 			if not upOpen(header, name, dialogPattern, "Clicking [E] " .. name) then
 				error("open failed", 0)
 			end
 		end)
 		if not ok then upWarn(UP.note or "Could not open the panel") end
-		S.Refilling = false
+		M.SetPause("upgrade", false)
+		M.ReleaseCharacter("upgrade")
+		S.Upgrading = false
+		getgenv().KiraHub.State.Upgrading = false
 		if AutoFarm then
 			AutoFarm._holdUntil = 0
 			if wasFarm and upFarmOn() then pcall(function() AutoFarm:Start() end) end
@@ -5603,6 +5715,7 @@ KiraEngine = (function(Ctx)
 		-- unaffordable purchases. Keep that exact behaviour for base upgrades.
 		UP.charBusy = true
 		S.Upgrading = true
+		getgenv().KiraHub.State.Upgrading = true
 		local ok, err = pcall(function()
 			local bought = 0
 			-- Exact Obsidian v1 base loop: read the live Cost attribute, fire
@@ -5633,12 +5746,57 @@ KiraEngine = (function(Ctx)
 			getgenv().KiraHub.State.UpgradeNote = UP.note
 		end)
 		S.Upgrading = false
+		getgenv().KiraHub.State.Upgrading = false
 		UP.charBusy = false
 		if not ok then
 			upWarn("Error: " .. tostring(err))
 			return false, tostring(err)
 		end
 		return true
+	end
+
+	function M.RunWaveUpgrades(wantBase, wantGear, deferred)
+		task.spawn(function()
+			if wantBase then
+				local ok, why = M.WavesBase(nil, true, deferred)
+				getgenv().KiraHub.State.UpgradeNote = UP.note
+				if ok or why == "reserve" then
+					UP.charFails = 0
+				else
+					UP.charFails = UP.charFails + 1
+					if UP.charFails < 3 then
+						UP.charDone = -1
+						UP.charRetry = os.clock() + 4
+					end
+				end
+			end
+			if wantGear then
+				local ok, why = M.WavesGear(nil, true, deferred)
+				getgenv().KiraHub.State.UpgradeNote = UP.note
+				if ok or why == "reserve" then
+					UP.bladeFails = 0
+				else
+					UP.bladeFails = UP.bladeFails + 1
+					if UP.bladeFails < 3 then
+						UP.bladeDone = -1
+						UP.bladeRetry = os.clock() + 4
+					end
+				end
+			end
+		end)
+	end
+
+	-- An upgrade that had to wait for a refill still has to run. It is fired
+	-- with force=true so neither the 15 s grace nor the every-2-waves gate can
+	-- swallow it a second time; the wave was already reserved by WavesTick.
+	function M.FlushPendingUpgrade()
+		if not S.PendingUpgrade then return end
+		if S.Refilling or S.CharOwner == "refill" then return end
+		if UP.charBusy or UP.bladeBusy then return end
+		if not IsWavesMode() then S.PendingUpgrade = nil return end
+		local queued = S.PendingUpgrade
+		S.PendingUpgrade = nil
+		M.RunWaveUpgrades(queued.base, queued.gear, true)
 	end
 
 	function M.WavesTick()
@@ -5665,34 +5823,16 @@ KiraEngine = (function(Ctx)
 		-- two upgrade trips never fight over the character.
 		if wantBase then UP.charDone = wave end
 		if wantGear then UP.bladeDone = wave end
-		task.spawn(function()
-			if wantBase then
-				local ok, why = M.WavesBase(nil, true)
-				getgenv().KiraHub.State.UpgradeNote = UP.note
-				if ok or why == "reserve" then
-					UP.charFails = 0
-				else
-					UP.charFails = UP.charFails + 1
-					if UP.charFails < 3 then
-						UP.charDone = -1
-						UP.charRetry = os.clock() + 4
-					end
-				end
-			end
-			if wantGear then
-				local ok, why = M.WavesGear(nil, true)
-				getgenv().KiraHub.State.UpgradeNote = UP.note
-				if ok or why == "reserve" then
-					UP.bladeFails = 0
-				else
-					UP.bladeFails = UP.bladeFails + 1
-					if UP.bladeFails < 3 then
-						UP.bladeDone = -1
-						UP.bladeRetry = os.clock() + 4
-					end
-				end
-			end
-		end)
+		-- A refill (or another character owner) is active: queue the upgrade
+		-- instead of losing it to the grace window. It runs as soon as the
+		-- character is released, and refills cannot start while it is queued.
+		if M.RefillActive() or (S.CharOwner and S.CharOwner ~= "upgrade") then
+			S.PendingUpgrade = { base = wantBase, gear = wantGear, wave = wave }
+			UP.note = "Queued behind refill"
+			getgenv().KiraHub.State.UpgradeNote = UP.note
+			return
+		end
+		M.RunWaveUpgrades(wantBase, wantGear)
 	end
 
 	-- ------------------------------------------------------------------
@@ -6133,23 +6273,27 @@ KiraEngine = (function(Ctx)
 		heartbeat = RunService.Heartbeat:Connect(function(dt)
 			if not getgenv().KiraHubAOTR then return end
 			if isLobby or isMenu then return end
-			-- Watchdog: a paused state left behind by an interrupted action
-			-- must never freeze movement for good.
-			if S.Paused then
-				S.PausedAt = S.PausedAt or os.clock()
-				if not S.Refilling and os.clock() - S.PausedAt > 20 then
-					S.Paused = false
-					S.PausedAt = nil
+			-- Watchdog: clear only a STALE pause owner. A live refill or
+			-- upgrade must never have its pause taken away by the watchdog,
+			-- and one owner may not clear another owner's pause any more.
+			for owner, since in pairs(S.PauseOwners) do
+				if os.clock() - since > 20 and not M.CharOwner then
+					S.PauseOwners[owner] = nil
 				end
-			else
-				S.PausedAt = nil
 			end
+			S.Paused = next(S.PauseOwners) ~= nil
+			if not S.Paused then S.PausedAt = nil end
+			-- Run any upgrade deferred by an active refill as soon as the
+			-- character is free again.
+			pcall(M.FlushPendingUpgrade)
 			pcall(M.MoveStep, dt)
 		end)
 
 		task.spawn(function()
 			while getgenv().KiraHubAOTR do
 				task.wait(0.12)
+				-- Keep the public mirror honest even if legacy code touched it.
+				pcall(M.SyncFarmState)
 				pcall(M.RefillStatus)
 				if not isLobby and not isMenu then
 					pcall(M.QTEWatch)
@@ -6282,6 +6426,18 @@ KiraWaves = (function(Ctx)
 	end
 	M.Waves = waves
 
+	-- A refill or an upgrade may own the character. Wave helpers that fire
+	-- purchase/interaction remotes stand down while that happens and retry on
+	-- their next tick, so the two jobs never interrupt each other.
+	local function busy()
+		if not KiraEngine then return false end
+		local refill = KiraEngine.RefillActive and KiraEngine.RefillActive()
+		local upgrade = KiraEngine.UpgradeActive and KiraEngine.UpgradeActive()
+		local owner = KiraEngine.CharBusy and KiraEngine.CharBusy()
+		return refill == true or upgrade == true or owner ~= nil
+	end
+	M.Busy = busy
+
 	local function gold()
 		local ok, v = pcall(function() return KiraEngine and KiraEngine.Gold() end)
 		return ok and tonumber(v) or nil
@@ -6337,7 +6493,7 @@ KiraWaves = (function(Ctx)
 		local cur = currentWave()
 		if not cur or target < 1 or target > cur then return end
 		if rewardsVisible() then return end
-		if KiraEngine and (KiraEngine.State.Refilling or KiraEngine.State.Upgrading) then return end
+		if busy() or (KiraEngine and KiraEngine.CharBusy and KiraEngine.CharBusy()) then return end
 		if M._diedWave == cur then return end
 		M._diedWave = cur
 		local char = player.Character
@@ -6384,6 +6540,7 @@ KiraWaves = (function(Ctx)
 		local roll = T("AutoRollBlessingToggle", false)
 		local picked = T("WavesAutoRollPickToggle", false)
 		if not roll and not picked then return end
+		if busy() then return end
 		if os.clock() - (M._lastRoll or 0) < 6 then return end
 		if M.BlessingDone() then
 			player:SetAttribute("KiraRollDone", true)
@@ -6415,6 +6572,7 @@ KiraWaves = (function(Ctx)
 	-- ------------------------------------------------------------------
 	function M.EquipBest()
 		if not T("WavesAutoEquip", false) or not waves() then return end
+		if busy() then return end
 		if os.clock() - (M._lastEquip or 0) < 8 then return end
 		M._lastEquip = os.clock()
 		local d = KiraEngine and KiraEngine.Stats and KiraEngine.Stats() or nil
@@ -6503,6 +6661,7 @@ KiraWaves = (function(Ctx)
 	function M.GoldPriority()
 		if not waves() then return end
 		if not KiraEngine.UpgradeWindow() then return end
+		if busy() then return end
 		if os.clock() - (M._lastPrio or 0) < 3 then return end
 		M._lastPrio = os.clock()
 		for i = 1, 5 do
@@ -6610,6 +6769,7 @@ KiraWaves = (function(Ctx)
 
 	function M.OrangeShop()
 		if not waves() then return end
+		if busy() then return end
 		local all = T("WavesOrangeAll", false)
 		local useSel = T("WavesOrangeSelected", false)
 		if not all and not useSel then return end
@@ -11699,6 +11859,7 @@ end
 function HandleAutoRefillWave()
 	if not IsToggled("AutoRefillWaveToggle") then return end
 	if not IsWavesMode() then return end
+	if KiraEngine and KiraEngine.UpgradeActive() then return end
 	local rc = getgenv().KiraHub.Refill
 	if rc and rc.Try then pcall(function() rc:Try() end) end
 end
