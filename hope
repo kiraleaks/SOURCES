@@ -1448,6 +1448,7 @@ end
 function KiraBladeAttack(targetPart, validNapes, isBoss)
 	local st = getgenv().KiraHub and getgenv().KiraHub.State
 	if not st then return 0 end
+	local es = KiraEngine and KiraEngine.State
 	local _, root = KiraEngine.Char()
 	if not (root and targetPart and targetPart.Parent) then return 0 end
 
@@ -1509,13 +1510,15 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 			local vuln = boss and KiraEngine.VulnPart(model) or nil
 			if (nape.Parent and nape.CanTouch) or vuln then
 				local base = boss and math.max(1, math.floor(KiraEngine.BossMult() or 1)) or 1
-				if boss and (st.MissStreak or 0) >= 2 then base = 1 end
+				-- Boss burst stays intact; Damage_Check resets the engine streak.
 				local hits = math.min(60, base * KiraEngine.DamageMult())
+				local beforeSent = sent
 				for _ = 1, hits do
 					if sent >= 700 then break end
 					postRemote:FireServer("Hitboxes", "Register", vuln or nape, 0.012 + math.random() * 0.024)
 					sent = sent + 1
 				end
+				if sent > beforeSent and es then es.MissStreak = 0 end
 				if model and not boss then
 					KiraEngine.State.Pending[model] = os.clock()
 				end
@@ -1527,8 +1530,14 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 	-- Reference cadence: SwingDelay, plus an extra beat after repeated
 	-- misses on a boss.
 	task.wait(KiraEngine.SwingDelay or 0.4)
-	if isBoss and (st.MissStreak or 0) >= 2 then task.wait(0.6) end
-	st.MissStreak = (st.MissStreak or 0) + 1
+	-- Only a swing that registered nothing gets a short cooldown. Never let
+	-- a stale streak disable boss multi-hit in waves or raids.
+	if sent == 0 then
+		if es then es.MissStreak = (es.MissStreak or 0) + 1 end
+		task.wait(0.15)
+	elseif es then
+		es.MissStreak = 0
+	end
 
 	-- Reference reload check: when every blade is broken, top the rig up
 	-- from a spare set (a free swap first, then the Blades/Reload remote).
@@ -5140,6 +5149,21 @@ KiraEngine = (function(Ctx)
 	}
 	M.UpgradeState = UP
 
+	-- Every real purchase gets its own in-game notification with the exact
+	-- stat that was upgraded. Identical messages are throttled so a 40-item
+	-- buying loop cannot flood the notification stack.
+	local lastUpgradeNotice, lastUpgradeNoticeAt = nil, 0
+	local function upgradeNotice(kind, text)
+		UP.note = text
+		getgenv().KiraHub.State.UpgradeNote = text
+		if text == lastUpgradeNotice and os.clock() - lastUpgradeNoticeAt < 1 then return end
+		lastUpgradeNotice, lastUpgradeNoticeAt = text, os.clock()
+		pcall(function()
+			Library:Notify({Title = "Kira Hub | " .. tostring(kind), Description = tostring(text), Time = 3})
+		end)
+	end
+	M.UpgradeNotice = upgradeNotice
+
 	-- Waves upgrades run inside the 15 s grace window after a wave is cleared,
 	-- once every 2 cleared waves. Both values are fixed on purpose so the
 	-- existing toggles keep their UI.
@@ -5603,8 +5627,7 @@ KiraEngine = (function(Ctx)
 					if result == "ok" then
 						bought = bought + 1
 						local lvl = stats.Upgrades and stats.Upgrades[weapon] and stats.Upgrades[weapon][stat] or 0
-						UP.note = ("WAVES GEAR: %s -> level %s (Gold %s)"):format(stat, tostring(lvl), tostring(stats.Gold))
-						getgenv().KiraHub.State.UpgradeNote = UP.note
+						upgradeNotice("Gear", ("%s -> Lv.%s | Gold %s"):format(stat, tostring(lvl), tostring(stats.Gold)))
 						task.wait(0.3)
 						boughtOne = true
 						break
@@ -5724,13 +5747,13 @@ KiraEngine = (function(Ctx)
 				if not filterOn or upAllowed(allow, name) then
 					local f = upgradesFolder:FindFirstChild(name)
 					if f and (f:GetAttribute("Cost") or 0) > 0 then
+						local cost = f:GetAttribute("Cost") or 0
 						local sent, res = pcall(function()
 							return getRemote:InvokeServer("Waves", "Upgrade", { name })
 						end)
 						if sent and res ~= nil then
 							bought = bought + 1
-							UP.note = "WAVES HQ: upgrade " .. name
-							getgenv().KiraHub.State.UpgradeNote = UP.note
+							upgradeNotice("Base", (tostring(name) .. " upgraded | Cost " .. tostring(cost)))
 							goldCacheAt = 0
 							statsCache, statsAt = nil, 0
 						end
@@ -6560,9 +6583,12 @@ KiraWaves = (function(Ctx)
 		local cost = math.ceil(2000 * (1.43 ^ rolled) * unworthy)
 		if not canSpend(cost) then return end
 		M._lastRoll = os.clock()
+		local spun = false
 		pcall(function()
 			getRemote:InvokeServer("Waves", "Blessing", "Spin")
+			spun = true
 		end)
+		if spun then note("Blessing rolled | Cost " .. tostring(cost)) end
 	end
 
 	-- ------------------------------------------------------------------
@@ -6605,6 +6631,10 @@ KiraWaves = (function(Ctx)
 						pcall(function()
 							getRemote:InvokeServer("S_Equipment", "State", cat, "Equip", bestId, slot)
 						end)
+					end
+					if os.clock() - (M._lastEquipNoteAt or 0) > 2 then
+						M._lastEquipNoteAt = os.clock()
+						note("Equipped best " .. tostring(cat) .. " #" .. tostring(bestId))
 					end
 				end
 			end
@@ -6779,6 +6809,7 @@ KiraWaves = (function(Ctx)
 		local haveGold = gold()
 		local capacity = tonumber(player:GetAttribute("Capacity")) or 0
 		local bought = 0
+		local boughtLabels = {}
 		for _, item in ipairs(shopItems()) do
 			if item.stock > 0 and item.id and (all or chosen[item.opt]) then
 				local qty = math.min(item.stock, math.floor((haveGold or 0) / item.price), 1000 - capacity)
@@ -6792,12 +6823,16 @@ KiraWaves = (function(Ctx)
 						haveGold = (haveGold or 0) - item.price * qty
 						capacity = capacity + qty
 						bought = bought + qty
+						boughtLabels[#boughtLabels + 1] = (tostring(item.name or item.opt) .. " x" .. tostring(qty))
 						task.wait(0.35)
 					end
 				end
 			end
 		end
-		if bought > 0 then M.UpdateLabels() end
+		if bought > 0 then
+			note("Orange shop: " .. table.concat(boughtLabels, ", "))
+			M.UpdateLabels()
+		end
 	end
 
 	function M.ColeShop()
@@ -8585,16 +8620,16 @@ function BuildWebhooksTab(TabRef)
 	WH_Events:AddToggle("ToggleSkinHunterWebhook", {Text = "Enable Skin Hunter Alerts", Default = false})
 	Toggles.ToggleSkinHunterWebhook:OnChanged(function() MarkDirty() end)
 
-	WH_Events:AddToggle("WebhookWave", {Text = "Enable Wave Progress Alerts", Default = false})
+	WH_Events:AddToggle("WebhookWave", {Text = "Wave Webhook (every N waves)", Default = false})
 	Toggles.WebhookWave:OnChanged(function() MarkDirty() end)
 
 	WH_Events:AddSlider("WebhookWaveInterval", {
-		Text = "Wave Alert Every N Waves",
+		Text = "Every N Cleared Waves",
 		Default = 5,
 		Min = 1,
 		Max = 50,
 		Rounding = 0,
-		Tooltip = "Sends a progress webhook every N cleared waves."
+		Tooltip = "Sends one wave-progress webhook every N cleared waves. Default: 5."
 	})
 	Options.WebhookWaveInterval:OnChanged(function() MarkDirty() end)
 
@@ -9869,8 +9904,25 @@ function HandleWaveWebhookProgress()
 	if not IsWavesMode() then return end
 	local url = getgenv().KiraHub.Webhooks.GetRewards()
 	if url == "" then return end
+
+	-- Multiple ways to read the counter: the HUD label, KiraWaves' own HUD
+	-- parser, or the workspace attribute. One of them is always available.
 	local cleared = KiraWavesClearedCount()
+	if not cleared or cleared <= 0 then
+		local ok, n = pcall(function()
+			return KiraWaves and KiraWaves.CurrentWave and KiraWaves.CurrentWave()
+		end)
+		if ok and tonumber(n) then cleared = math.floor(tonumber(n)) end
+	end
+	if not cleared or cleared <= 0 then
+		local ok, n = pcall(function()
+			local a = workspace:GetAttributes() or {}
+			return tonumber(a.Wave or a.WavesCleared or a.CurrentWave)
+		end)
+		if ok and n then cleared = math.floor(n) end
+	end
 	if not cleared or cleared <= 0 then return end
+
 	local interval = math.max(1, math.floor(tonumber(GetOption("WebhookWaveInterval", 5)) or 5))
 	local state = getgenv().KiraHub.State
 	local last = tonumber(state.LastWaveWebhook) or 0
@@ -9880,25 +9932,33 @@ function HandleWaveWebhookProgress()
 
 	local attrs = workspace:GetAttributes() or {}
 	local boosted = attrs.Boosted and "Yes" or "No"
+	local fields = {
+		{name = "Result", value = "IN PROGRESS", inline = false},
+		{name = "Mode", value = "Waves", inline = true},
+		{name = "Waves Cleared", value = tostring(cleared), inline = true},
+		{name = "Difficulty", value = tostring(attrs.Difficulty or "?"), inline = true},
+		{name = "Reward Boost", value = boosted, inline = true},
+		{name = "Level", value = tostring(player:GetAttribute("Level") or "?"), inline = true},
+		{name = "Missions this session", value = tostring(tonumber(state.SessionMissions) or 0), inline = true},
+		{name = "Session time", value = KiraSessionDuration(), inline = true}
+	}
+	local lastUpgrade = tostring(state.UpgradeNote or "")
+	if lastUpgrade ~= "" then
+		fields[#fields + 1] = {name = "Last upgrade", value = lastUpgrade, inline = false}
+	end
 	getgenv().KiraHub.Webhooks.Post(url, {
 		embeds = {{
 			title = "Kira Hub | Wave Progress",
 			description = "**" .. tostring(cleared) .. "** waves cleared in this run.",
 			color = 3447003,
-			fields = {
-				{name = "Result", value = "IN PROGRESS", inline = false},
-				{name = "Mode", value = "Waves", inline = true},
-				{name = "Waves Cleared", value = tostring(cleared), inline = true},
-				{name = "Difficulty", value = tostring(attrs.Difficulty or "?"), inline = true},
-				{name = "Reward Boost", value = boosted, inline = true},
-				{name = "Level", value = tostring(player:GetAttribute("Level") or "?"), inline = true},
-				{name = "Missions this session", value = tostring(tonumber(state.SessionMissions) or 0), inline = true},
-				{name = "Session time", value = KiraSessionDuration(), inline = true}
-			},
+			fields = fields,
 			footer = {text = "Kira Hub | Wave Tracker"},
 			timestamp = DateTime.now():ToIsoDate()
 		}}
 	})
+	pcall(function()
+		Library:Notify({Title = "Wave Webhook", Description = "Wave " .. tostring(cleared) .. " progress sent", Time = 3})
+	end)
 end
 
 function DispatchMissionWebhook(data)
