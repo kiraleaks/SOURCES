@@ -4292,9 +4292,15 @@ KiraEngine = (function(Ctx)
 			segs, sets = M.BladeAmmo()
 		end
 		if sets > 0 then
+			-- One swap per ~1.2 s: the attack loop and the refill loop both
+			-- call this, and firing the remote twice burned a spare set.
+			local now = os.clock()
+			if now < (S.BladeSwapAt or 0) then return false end
+			S.BladeSwapAt = now + 1.2
 			pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
 			task.wait(0.15)
 			segs = M.BladeAmmo()
+			if segs > 0 then note("Blades: spare set loaded") end
 		end
 		return segs > 0
 	end
@@ -4694,6 +4700,8 @@ KiraEngine = (function(Ctx)
 	function M.RefillOnce(count)
 		if not M.RefillOn() then return false end
 		if S.Refilling then return false end
+		-- A crate owns the character for a few seconds.
+		if S.CharOwner == "crate" or getgenv().KiraHub.State.CrateBusy then return false end
 		-- Upgrades own the character when they are running or queued. A refill
 		-- may never displace them; it simply skips this cycle and retries.
 		if M.UpgradeActive() then return false end
@@ -4791,8 +4799,14 @@ KiraEngine = (function(Ctx)
 	end
 
 	-- One refill switch decides for missions, raids and waves alike.
+	-- LN also has a per-mode Auto Refill switch on the Waves tab. Before this,
+	-- that toggle was handled by the legacy RefillCore while the engine ran
+	-- its own station trip, so the two routines teleported the character in
+	-- opposite directions and the reload randomly failed in Waves.
 	function M.RefillOn()
-		return M.Toggle("AutoReloadToggle", false)
+		if M.Toggle("AutoReloadToggle", false) then return true end
+		if IsWavesMode() and M.Toggle("AutoRefillWaveToggle", false) then return true end
+		return false
 	end
 
 	-- Reference RefillDue gate: switch on, no refill already running, alive,
@@ -4804,9 +4818,22 @@ KiraEngine = (function(Ctx)
 		if M.IsTitan() or player:GetAttribute("Dead") ~= nil then return false end
 		if os.clock() < (S.RefillRetryAt or 0) then return false end
 		if not M.RefillPossible() then return false end
-		if M.AmmoEmpty() ~= true then return false end
-		-- Colossal phase 1: a loaded cannon owns the character. The trip has to
-		-- fit between shots, so never walk away from a ready cannon.
+		-- A crate owns the character for a few seconds; never start a station
+		-- trip on top of it.
+		if S.CharOwner == "crate" or getgenv().KiraHub.State.CrateBusy then return false end
+		local empty = M.AmmoEmpty()
+		if empty == nil then return false end
+		-- Blades with an unused spare set need the Blades/Reload swap, not a
+		-- station trip. AutoFarm's legacy loop used to fire this, but it is
+		-- skipped while the engine is on - that is exactly why the reload
+		-- "sometimes" stopped working in Waves.
+		if not empty and M.Weapon() == "Blades" then
+			local segs, sets = M.BladeAmmo()
+			if segs == 0 and sets > 0 then
+				return M.BladeReload()
+			end
+		end
+		if empty ~= true then return false end
 		if M.ColossalPhase1() and M.CannonReadyNow() then return false end
 		return M.RefillOnce(M.RefillsTotal())
 	end
@@ -5715,7 +5742,7 @@ KiraEngine = (function(Ctx)
 		return ok
 	end
 
-	function M.WavesBase(only, fromTick, force)
+	function M.WavesBase(only, fromTick, force, remote)
 		-- Remote purchases never move the character, so an active refill must
 		-- not suppress them.
 		if UP.charBusy then return false end
@@ -5736,9 +5763,13 @@ KiraEngine = (function(Ctx)
 		if not upgradesFolder then upWarn("Waves Upgrades folder not found") return false end
 		-- v1 only looked at the live Cost attribute and let the server reject
 		-- unaffordable purchases. Keep that exact behaviour for base upgrades.
-		UP.charBusy = true
-		S.Upgrading = true
-		getgenv().KiraHub.State.Upgrading = true
+		-- A remote-only call (LN Auto HQ) must not claim the character or mark
+		-- an upgrade trip: that blocked refills for no reason.
+		if not remote then
+			UP.charBusy = true
+			S.Upgrading = true
+			getgenv().KiraHub.State.Upgrading = true
+		end
 		local ok, err = pcall(function()
 			local bought = 0
 			-- Exact Obsidian v1 base loop: read the live Cost attribute, fire
@@ -5768,14 +5799,34 @@ KiraEngine = (function(Ctx)
 			end
 			getgenv().KiraHub.State.UpgradeNote = UP.note
 		end)
-		S.Upgrading = false
-		getgenv().KiraHub.State.Upgrading = false
-		UP.charBusy = false
+		if not remote then
+			S.Upgrading = false
+			getgenv().KiraHub.State.Upgrading = false
+			UP.charBusy = false
+		end
 		if not ok then
 			upWarn("Error: " .. tostring(err))
 			return false, tostring(err)
 		end
 		return true
+	end
+
+	-- LN's Auto Upgrade Base (HQ) is a pure remote purchase: it never moves the
+	-- character. It therefore must not wait for the every-2-waves gear window
+	-- (that gate made "Cole: Upgrade All" look dead). This runs on its own
+	-- short cadence, exactly like the reference's AutoHQ loop.
+	function M.BaseTick()
+		if not IsWavesMode() then return false end
+		local on = M.Toggle("WavesColeAll", false) or M.Toggle("ColeSelected", false)
+		if not on then return false end
+		if UP.charBusy or S.Upgrading then return false end
+		if S.CharOwner == "crate" or getgenv().KiraHub.State.CrateBusy then return false end
+		local now = os.clock()
+		if now < (UP.baseNext or 0) then return false end
+		UP.baseNext = now + 2.5
+		local ok, why = M.WavesBase(nil, false, true, true)
+		if not ok and why then UP.note = "Base: " .. tostring(why) end
+		return ok, why
 	end
 
 	function M.RunWaveUpgrades(wantBase, wantGear, deferred)
@@ -5827,35 +5878,33 @@ KiraEngine = (function(Ctx)
 		-- Track the clear time even while a refill/trip is busy, so the grace
 		-- window is measured from the actual wave change.
 		local wave = upWaveGate()
+		-- LN Auto HQ: base upgrades are remote purchases, so they run on their
+		-- own cadence instead of waiting for the every-2-waves gear window.
+		pcall(M.BaseTick)
 		if UP.charBusy or UP.bladeBusy then return end
 		-- Only act inside the grace window right after the wave was cleared.
 		if os.clock() - UP.clearAt > UP_GRACE then return end
-		-- Upgrades run on every 2nd cleared wave. When the HUD counter cannot
+		-- Gear runs on every 2nd cleared wave. When the HUD counter cannot
 		-- be read at all, the fallback key upgrades once every 45 s instead.
 		if type(wave) == "number" then
 			if wave < UP_EVERY or wave % UP_EVERY ~= 0 then return end
 		end
-		-- Both upgrade paths now use v1's remotes and share this same gate.
-		local wantBase = (M.Toggle("WavesColeAll", false) or M.Toggle("ColeSelected", false))
-			and wave ~= UP.charDone and os.clock() >= UP.charRetry
 		local wantGear = M.Toggle("AutoWavesUpgradeToggle", false)
 			and wave ~= UP.bladeDone and os.clock() >= UP.bladeRetry
-		if not (wantBase or wantGear) then return end
+		if not wantGear then return end
 		-- Reserve this wave before the thread starts so the next tick cannot
-		-- spawn a second trip. Cole and Lulu also run one after the other so
-		-- two upgrade trips never fight over the character.
-		if wantBase then UP.charDone = wave end
-		if wantGear then UP.bladeDone = wave end
+		-- spawn a second trip.
+		UP.bladeDone = wave
 		-- A refill (or another character owner) is active: queue the upgrade
 		-- instead of losing it to the grace window. It runs as soon as the
 		-- character is released, and refills cannot start while it is queued.
 		if M.RefillActive() or (S.CharOwner and S.CharOwner ~= "upgrade") then
-			S.PendingUpgrade = { base = wantBase, gear = wantGear, wave = wave }
+			S.PendingUpgrade = { base = false, gear = true, wave = wave }
 			UP.note = "Queued behind refill"
 			getgenv().KiraHub.State.UpgradeNote = UP.note
 			return
 		end
-		M.RunWaveUpgrades(wantBase, wantGear)
+		M.RunWaveUpgrades(false, true)
 	end
 
 	-- ------------------------------------------------------------------
@@ -11837,34 +11886,119 @@ end
 function HandleAutoCollectCrate()
 	if not IsToggled("AutoCollectCrateToggle") then return end
 	if not IsWavesMode() then return end
-	
+	local state = getgenv().KiraHub.State
+	if state.CrateBusy then return end
+	if os.clock() < (state.NextCrateAt or 0) then return end
+
 	local wavesFolder = workspace:FindFirstChild("Waves")
 	local cratesFolder = wavesFolder and wavesFolder:FindFirstChild("Crates")
 	local myCrate = cratesFolder and cratesFolder:FindFirstChild("Crate_" .. player.Name)
-	
-	if not myCrate then return end
-	
-	local wasFarming = AutoFarm._running
-	-- Keep the watchdog quiet while the character detours to the crate.
-	AutoFarm._holdUntil = os.clock() + 9
-	if wasFarming then AutoFarm:Stop() end
-	
-	local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-	if root then
-		root.CFrame = CFrame.new(myCrate:GetPivot().Position + Vector3.new(0, 5, 0))
-		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	local char, root = KiraChar()
+	if not myCrate or not root or player:GetAttribute("Dead") ~= nil then return end
+
+	local box = myCrate:FindFirstChild("Box") or myCrate.PrimaryPart
+		or myCrate:FindFirstChildWhichIsA("BasePart", true)
+	if not box then return end
+
+	-- One character owner at a time: a crate must not fight a refill or an
+	-- upgrade trip.
+	if KiraEngine then
+		if not KiraEngine.HoldCharacter("crate", 0) then
+			state.NextCrateAt = os.clock() + 2
+			return
+		end
 	end
-	task.wait(2)
-	
-	local zonesFolder = wavesFolder and wavesFolder:FindFirstChild("Zones")
-	local skillsZone = zonesFolder and zonesFolder:FindFirstChild("Skills")
-	if skillsZone and root then
-		root.CFrame = CFrame.new(skillsZone:GetPivot().Position + Vector3.new(0, 5, 0))
-		root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+	local wasFarming = AutoFarm and AutoFarm._running
+	if AutoFarm then AutoFarm._holdUntil = os.clock() + 10 end
+	if wasFarming then pcall(function() AutoFarm:Stop() end) end
+	if KiraEngine then KiraEngine.SetPause("crate", true) end
+	state.CrateBusy = true
+
+	local backCFrame = root.CFrame
+	local okSkill, skill = pcall(function() return myCrate:GetAttribute("Skill") end)
+	if not okSkill then skill = nil end
+	local occupied = false
+	local started = os.clock()
+
+	local function openCrate()
+		-- Exact LN entry point: the game's own host.Modules.Waves.Crate.
+		if type(getgc) == "function" then
+			local ok, host = pcall(function()
+				for _, v in ipairs(getgc(true)) do
+					if type(v) == "table" and type(rawget(v, "Modules")) == "table"
+						and type(v.Modules.Waves) == "table"
+						and type(v.Modules.Waves.Crate) == "function" then
+						return v
+					end
+				end
+				return nil
+			end)
+			if ok and host then
+				pcall(function() host.Modules.Waves.Crate(host, host.Folder) end)
+				return
+			end
+		end
+		-- Fallbacks for executors without getgc.
+		pcall(function()
+			local prompt = myCrate:FindFirstChildWhichIsA("ProximityPrompt", true)
+			if prompt then KiraPressPrompt(prompt) end
+		end)
+		pcall(function() postRemote:FireServer("Waves", "Crate", myCrate) end)
+		pcall(function() getRemote:InvokeServer("Waves", "Crate", myCrate) end)
 	end
-	task.wait(2)
-	
-	if wasFarming then AutoFarm:Start() end
+
+	local openedByGame = false
+	local okLoop, loopErr = pcall(function()
+		while os.clock() - started < 5 and myCrate.Parent and box.Parent do
+			local _, r = KiraChar()
+			if not r then break end
+			r.CFrame = CFrame.new(box.Position + Vector3.new(0, 3, 0))
+			r.AssemblyLinearVelocity = Vector3.zero
+			if not occupied and myCrate:GetAttribute("Occupied") ~= nil then
+				occupied = true
+				pcall(openCrate)
+			end
+			task.wait(0.05)
+		end
+		openedByGame = myCrate.Parent == nil
+	end)
+
+	local _, r2 = KiraChar()
+	if r2 then
+		r2.CFrame = backCFrame
+		r2.AssemblyLinearVelocity = Vector3.zero
+	end
+	if KiraEngine then
+		KiraEngine.SetPause("crate", false)
+		KiraEngine.ReleaseCharacter("crate")
+	end
+	state.CrateBusy = false
+	if AutoFarm then AutoFarm._holdUntil = 0 end
+	if wasFarming and (IsToggled("AutoKillToggle") or IsToggled("AutoFarmRaidsToggle")
+		or IsToggled("AutoWavesToggle")) then
+		pcall(function() AutoFarm:Start() end)
+	end
+
+	if not okLoop then
+		print("[Kira Hub] WAVES CRATE error: " .. tostring(loopErr))
+	end
+	if openedByGame then
+		local label = "Skill #" .. tostring(skill)
+		pcall(function()
+			local info = require(game:GetService("ReplicatedStorage").Modules.Storage.Skill).Info
+			local entry = info[tostring(skill)] or info[skill]
+			if entry then
+				label = tostring(entry.Tag) .. " (" .. tostring(entry.Rarity) .. ")"
+			end
+		end)
+		pcall(function()
+			Library:Notify({Title = "Auto Crate", Description = "Crate opened: " .. label, Time = 5})
+		end)
+		print("[Kira Hub] WAVES CRATE: opened by game (" .. label .. ")")
+	else
+		print("[Kira Hub] WAVES CRATE: not opened in 5s")
+	end
 end
 
 function HandleWaveDieAt()
@@ -11919,7 +12053,11 @@ end
 function HandleAutoRefillWave()
 	if not IsToggled("AutoRefillWaveToggle") then return end
 	if not IsWavesMode() then return end
-	if KiraEngine and KiraEngine.UpgradeActive() then return end
+	if KiraEngine and KiraEngine.EngineOn() then
+		if KiraEngine.UpgradeActive() then return end
+		task.spawn(function() pcall(KiraEngine.RefillTick) end)
+		return
+	end
 	local rc = getgenv().KiraHub.Refill
 	if rc and rc.Try then pcall(function() rc:Try() end) end
 end
