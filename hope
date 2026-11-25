@@ -1509,9 +1509,14 @@ function KiraBladeAttack(targetPart, validNapes, isBoss)
 			local boss = model and KiraEngine.IsBossTitan(model) or false
 			local vuln = boss and KiraEngine.VulnPart(model) or nil
 			if (nape.Parent and nape.CanTouch) or vuln then
-				local base = boss and math.max(1, math.floor(KiraEngine.BossMult() or 1)) or 1
 				-- Boss burst stays intact; Damage_Check resets the engine streak.
-				local hits = math.min(60, base * KiraEngine.DamageMult())
+				-- Boss multi-hit now fires by default: it does NOT need the
+				-- damage multiplier to be slid — only an explicit slider change
+				-- raises the count further.
+				local base = boss and math.max(1, math.floor(KiraEngine.BossMult() or 1)) or 1
+				local mult = tonumber(KiraEngine.DamageMult()) or 1
+				local hits = math.min(60, math.max(1, math.floor(base * math.max(1, mult))))
+				if boss and hits < base then hits = base end
 				local beforeSent = sent
 				for _ = 1, hits do
 					if sent >= 700 then break end
@@ -1664,10 +1669,18 @@ function RefillCore:Try(forceKind, forceNow)
 		if not station then
 			self:SetStatus("No refill station")
 			-- Still try a remote without a station reference as a last resort.
-			if longRangeAllowed and post and post.Parent then
+			if post and post.Parent then
 				pcall(function() post:FireServer("Attacks", "Reload") end)
 			end
 			break
+		end
+
+		-- LONG-DISTANCE REFILL (fix): if the station is beyond a modest
+		-- radius, fire the Reload remote from anywhere instead of walking
+		-- there and back.
+		local sdist = (root.Position - (KiraPos(station) or root.Position)).Magnitude
+		if sdist > 30 then
+			longRangeAllowed = true
 		end
 
 		if longRangeAllowed then
@@ -4293,14 +4306,23 @@ KiraEngine = (function(Ctx)
 		end
 		if sets > 0 then
 			-- One swap per ~1.2 s: the attack loop and the refill loop both
-			-- call this, and firing the remote twice burned a spare set.
+			-- call this. When the rig is still empty after the remote fires,
+			-- reset the debounce so the next loop iteration retries (the
+			-- "rare" bug was: a fired-but-stale debounce block next to a
+			-- sparse walk path meant reload could silently stop).
 			local now = os.clock()
+			if now < (S.BladeSwapAt or 0) and M.BladeAmmo() == 0 then
+				S.BladeSwapAt = 0
+			end
 			if now < (S.BladeSwapAt or 0) then return false end
 			S.BladeSwapAt = now + 1.2
 			pcall(function() getRemote:InvokeServer("Blades", "Reload") end)
 			task.wait(0.15)
 			segs = M.BladeAmmo()
-			if segs > 0 then note("Blades: spare set loaded") end
+			if segs > 0 then
+				S.BladeSwapAt = 0
+				note("Blades: spare set loaded")
+			end
 		end
 		return segs > 0
 	end
@@ -4522,11 +4544,19 @@ KiraEngine = (function(Ctx)
 			end
 			if refresh then
 				list = {}
-				for _, v in ipairs(workspace:GetDescendants()) do
-					if v.Name == "Refill" and v:IsA("BasePart") and v.Parent
-						and v.Parent:GetAttribute("Max_Refills") == nil
-					then
-						list[#list + 1] = v
+				-- LESS LAG: iterate children levels instead of the whole
+				-- workspace tree; Refill stations sit close to the map root.
+				local scan = {workspace}
+				while #scan > 0 do
+					local cur = table.remove(scan, 1)
+					for _, v in ipairs(cur:GetChildren()) do
+						if v.Name == "Refill" and v:IsA("BasePart") and v.Parent
+							and v.Parent:GetAttribute("Max_Refills") == nil
+						then
+							list[#list + 1] = v
+						else
+							table.insert(scan, v)
+						end
 					end
 				end
 				S.RefillList, S.RefillListAt = list, os.clock()
@@ -5065,16 +5095,22 @@ KiraEngine = (function(Ctx)
 		if os.clock() - (S.RejoinScanAt or 0) < 0.5 then return end
 		S.RejoinScanAt = os.clock()
 		local found = false
-		for _, g in ipairs(pGui:GetDescendants()) do
-			if g:IsA("TextLabel") and g.Text
-				and string.find(g.Text, "rejoin the last match", 1, true) then
-				-- The label only counts while it and every GUI ancestor is visible.
-				local vis, par = g.Visible, g.Parent
-				while vis and par and par:IsA("GuiObject") do
-					vis = par.Visible
-					par = par.Parent
+		-- LESS LAG: children walk instead of GetDescendants.
+		local scan = {pGui}
+		while #scan > 0 and not found do
+			local cur = table.remove(scan, 1)
+			for _, g in ipairs(cur:GetChildren()) do
+				if g:IsA("TextLabel") and g.Text
+					and string.find(g.Text, "rejoin the last match", 1, true) then
+					-- The label only counts while it and every GUI ancestor is visible.
+					local vis, par = g.Visible, g.Parent
+					while vis and par and par:IsA("GuiObject") do
+						vis = par.Visible
+						par = par.Parent
+					end
+					if vis then found = true break end
 				end
-				if vis then found = true break end
+				table.insert(scan, g)
 			end
 		end
 		if not found then return end
@@ -5292,8 +5328,14 @@ KiraEngine = (function(Ctx)
 	end
 
 	local function upFindText(pred)
-		for _, d in ipairs(pGui:GetDescendants()) do
-			if upIsText(d) and upShown(d) and pred(upClean(d):lower()) then return d end
+		-- LESS LAG: manual children walk (upIsText matches only text instances).
+		local scan = {pGui}
+		while #scan > 0 do
+			local cur = table.remove(scan, 1)
+			for _, d in ipairs(cur:GetChildren()) do
+				if upIsText(d) and upShown(d) and pred(upClean(d):lower()) then return d end
+				table.insert(scan, d)
+			end
 		end
 		return nil
 	end
@@ -5331,14 +5373,20 @@ KiraEngine = (function(Ctx)
 			if not scope then break end
 			local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
 			local best, bestScore = nil, math.huge
-			for _, d in ipairs(scope:GetDescendants()) do
-				if d:IsA("GuiButton") and upShown(d) then
-					local c = upCenter(d)
-					local txt = d:IsA("TextButton") and upClean(d):upper() or ""
-					if txt == "X" or (c.Y < 120 and c.X > vp.X - 160 and d.AbsoluteSize.X < 120) then
-						local score = (vp.X - c.X) + c.Y
-						if score < bestScore then best, bestScore = d, score end
+			-- LESS LAG: children walk instead of GetDescendants.
+			local scan = {scope}
+			while #scan > 0 do
+				local cur = table.remove(scan, 1)
+				for _, d in ipairs(cur:GetChildren()) do
+					if d:IsA("GuiButton") and upShown(d) then
+						local c = upCenter(d)
+						local txt = d:IsA("TextButton") and upClean(d):upper() or ""
+						if txt == "X" or (c.Y < 120 and c.X > vp.X - 160 and d.AbsoluteSize.X < 120) then
+							local score = (vp.X - c.X) + c.Y
+							if score < bestScore then best, bestScore = d, score end
+						end
 					end
+					table.insert(scan, d)
 				end
 			end
 			if best then upClick(best, 1) end
@@ -5394,8 +5442,14 @@ KiraEngine = (function(Ctx)
 	end
 
 	local function upTitleFor(scope, card)
-		for _, d in ipairs(scope:GetDescendants()) do
-			if upIsText(d) and upShown(d) and upClean(d):lower() == card.title then return d end
+		-- LESS LAG: children walk instead of GetDescendants.
+		local scan = {scope}
+		while #scan > 0 do
+			local cur = table.remove(scan, 1)
+			for _, d in ipairs(cur:GetChildren()) do
+				if upIsText(d) and upShown(d) and upClean(d):lower() == card.title then return d end
+				table.insert(scan, d)
+			end
 		end
 		return nil
 	end
@@ -5403,14 +5457,20 @@ KiraEngine = (function(Ctx)
 	local function upBuyBtn(scope, titleLbl)
 		local tc = upCenter(titleLbl)
 		local best, bestDx = nil, 150
-		for _, d in ipairs(scope:GetDescendants()) do
-			if upIsText(d) and upShown(d) then
-				local t = upClean(d):lower()
-				if t:match("^buy%s*%(") or t:match("^max%s*%(") then
-					local c = upCenter(d)
-					local dx = math.abs(c.X - tc.X)
-					if c.Y > tc.Y and dx < bestDx then best, bestDx = d, dx end
+		-- LESS LAG: children walk instead of GetDescendants.
+		local scan = {scope}
+		while #scan > 0 do
+			local cur = table.remove(scan, 1)
+			for _, d in ipairs(cur:GetChildren()) do
+				if upIsText(d) and upShown(d) then
+					local t = upClean(d):lower()
+					if t:match("^buy%s*%(") or t:match("^max%s*%(") then
+						local c = upCenter(d)
+						local dx = math.abs(c.X - tc.X)
+						if c.Y > tc.Y and dx < bestDx then best, bestDx = d, dx end
+					end
 				end
+				table.insert(scan, d)
 			end
 		end
 		return best
@@ -5454,7 +5514,11 @@ KiraEngine = (function(Ctx)
 		end
 		goldCache = nil
 		local best, bestScore, bestV
-		for _, d in ipairs(pGui:GetDescendants()) do
+		-- LESS LAG: children walk instead of GetDescendants.
+		local scan = {pGui}
+		while #scan > 0 do
+			local cur = table.remove(scan, 1)
+			for _, d in ipairs(cur:GetChildren()) do
 			if d:IsA("TextLabel") and upShown(d) then
 				local cur, hinted = d, false
 				for _ = 1, 5 do
@@ -5477,7 +5541,9 @@ KiraEngine = (function(Ctx)
 					end
 				end
 			end
+			table.insert(scan, d)
 		end
+	end
 		if best then goldCache = best end
 		goldLast = bestV
 		return bestV
@@ -5525,10 +5591,16 @@ KiraEngine = (function(Ctx)
 			waveLabel = nil
 			if os.clock() - waveScanAt < 2 then return waveLast end
 			waveScanAt = os.clock()
-			for _, d in ipairs(pGui:GetDescendants()) do
-				if upIsText(d) and upClean(d):lower():match("^waves cleared%s*%[%s*%d+%s*/%s*%d+%s*%]") then
-					waveLabel = d
-					break
+			-- LESS LAG: children walk instead of GetDescendants.
+			local scan = {pGui}
+			while #scan > 0 and not waveLabel do
+				local cur = table.remove(scan, 1)
+				for _, d in ipairs(cur:GetChildren()) do
+					if upIsText(d) and upClean(d):lower():match("^waves cleared%s*%[%s*%d+%s*/%s*%d+%s*%]") then
+						waveLabel = d
+						break
+					end
+					table.insert(scan, d)
 				end
 			end
 		end
@@ -10348,9 +10420,16 @@ function CollectTSSupplies()
 	local root = char and char:FindFirstChild("HumanoidRootPart")
 	if not root then return 0 end
 	local crates = {}
-	for _, v in ipairs(workspace:GetDescendants()) do
-		if (v:IsA("Model") or v:IsA("BasePart")) and string.find(v.Name, "ThunderSpear_Supplies", 1, true) then
-			table.insert(crates, v)
+	-- LESS LAG: breadth-first children walk instead of the full workspace tree.
+	local scan = {workspace}
+	while #scan > 0 do
+		local cur = table.remove(scan, 1)
+		for _, v in ipairs(cur:GetChildren()) do
+			if (v:IsA("Model") or v:IsA("BasePart")) and string.find(v.Name, "ThunderSpear_Supplies", 1, true) then
+				table.insert(crates, v)
+			else
+				table.insert(scan, v)
+			end
 		end
 	end
 	if #crates == 0 then return 0 end
